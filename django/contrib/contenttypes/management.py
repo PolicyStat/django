@@ -14,6 +14,9 @@ def update_contenttypes(app, created_models, verbosity=2, **kwargs):
         return
     for klass in app_models:
         opts = klass._meta
+        # Proxy/Deferred models don't need contenttypes
+        if opts.proxy:
+            continue
         try:
             ct = ContentType.objects.get(app_label=opts.app_label,
                                          model=opts.object_name.lower())
