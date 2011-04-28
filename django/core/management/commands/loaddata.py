@@ -81,6 +81,17 @@ class Command(BaseCommand):
         if has_bz2:
             compression_types['bz2'] = bz2.BZ2File
 
+        # Some databases *cough mysql InnoDB* check constraints on each query
+        # instead # of at the end of a transaction. This means we can't make
+        # forward reference in separate queries.
+        #
+        # A compromise is to temporarily stop checking constraints when loading
+        # fixtures so that forward refs are possible. The downside is that
+        # broken references will silently be deleted, as opposed to failing
+        # loudly and with a useful error message.
+        # See: http://code.djangoproject.com/ticket/3615
+        connection.begin_defer_constraint_checks()
+
         app_module_paths = []
         for app in get_apps():
             if hasattr(app, '__path__'):
@@ -118,6 +129,7 @@ class Command(BaseCommand):
                 self.stderr.write(
                     self.style.ERROR("Problem installing fixture '%s': %s is not a known serialization format.\n" %
                         (fixture_name, format)))
+                connection.end_defer_constraint_checks()
                 if commit:
                     transaction.rollback(using=using)
                     transaction.leave_transaction_management(using=using)
@@ -153,6 +165,7 @@ class Command(BaseCommand):
                             fixture.close()
                             self.stderr.write(self.style.ERROR("Multiple fixtures named '%s' in %s. Aborting.\n" %
                                 (fixture_name, humanize(fixture_dir))))
+                            connection.end_defer_constraint_checks()
                             if commit:
                                 transaction.rollback(using=using)
                                 transaction.leave_transaction_management(using=using)
@@ -180,6 +193,7 @@ class Command(BaseCommand):
                             except Exception:
                                 import traceback
                                 fixture.close()
+                                connection.end_defer_constraint_checks()
                                 if commit:
                                     transaction.rollback(using=using)
                                     transaction.leave_transaction_management(using=using)
@@ -199,6 +213,7 @@ class Command(BaseCommand):
                                 self.stderr.write(
                                     self.style.ERROR("No fixture data found for '%s'. (File format may be invalid.)\n" %
                                         (fixture_name)))
+                                connection.end_defer_constraint_checks()
                                 if commit:
                                     transaction.rollback(using=using)
                                     transaction.leave_transaction_management(using=using)
@@ -219,6 +234,7 @@ class Command(BaseCommand):
                 for line in sequence_sql:
                     cursor.execute(line)
 
+        connection.end_defer_constraint_checks()
         if commit:
             transaction.commit(using=using)
             transaction.leave_transaction_management(using=using)

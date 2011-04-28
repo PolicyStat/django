@@ -255,6 +255,13 @@ class BaseDatabaseWrapper(local):
     def make_debug_cursor(self, cursor):
         return util.CursorDebugWrapper(cursor, self)
 
+    def begin_defer_constraint_checks(self):
+        pass
+
+    def end_defer_constraint_checks(self):
+        pass
+
+
 class BaseDatabaseFeatures(object):
     allows_group_by_pk = False
     # True if django.db.backend.utils.typecast_timestamp is used on values

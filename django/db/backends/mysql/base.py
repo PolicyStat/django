@@ -341,3 +341,9 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                 raise Exception('Unable to determine MySQL version from version string %r' % self.connection.get_server_info())
             self.server_version = tuple([int(x) for x in m.groups()])
         return self.server_version
+
+    def begin_defer_constraint_checks(self):
+        self.cursor().execute('SET foreign_key_checks=0')
+
+    def end_defer_constraint_checks(self):
+        self.cursor().execute('SET foreign_key_checks=1')
