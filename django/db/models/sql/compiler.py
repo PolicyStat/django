@@ -481,7 +481,7 @@ class SQLCompiler(object):
             for extra_select, extra_params in self.query.extra_select.itervalues():
                 extra_selects.append(extra_select)
                 params.extend(extra_params)
-            cols = (group_by + self.query.select +
+            cols = (group_by +
                 self.query.related_select_cols + extra_selects)
             for col in cols:
                 if isinstance(col, (list, tuple)):
