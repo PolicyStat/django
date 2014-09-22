@@ -1,12 +1,16 @@
+# -*- coding: utf-8 -*-
 import time
 from datetime import datetime, timedelta
 from StringIO import StringIO
 
+from django.conf import settings
 from django.core.handlers.modpython import ModPythonRequest
+from django.core.exceptions import SuspiciousOperation
 from django.core.handlers.wsgi import WSGIRequest, LimitedStream
 from django.http import HttpRequest, HttpResponse, parse_cookie
 from django.utils import unittest
 from django.utils.http import cookie_date
+
 
 class RequestsTests(unittest.TestCase):
     def test_httprequest(self):
@@ -57,6 +61,193 @@ class RequestsTests(unittest.TestCase):
         request.path = ''
         self.assertEqual(request.build_absolute_uri(location="/path/with:colons"),
             'http://www.example.com/path/with:colons')
+
+    def test_http_get_host(self):
+        _old_USE_X_FORWARDED_HOST = settings.USE_X_FORWARDED_HOST
+        _old_ALLOWED_HOSTS = settings.ALLOWED_HOSTS
+        try:
+            settings.USE_X_FORWARDED_HOST = False
+            settings.ALLOWED_HOSTS = [
+                'forward.com', 'example.com', 'internal.com', '12.34.56.78',
+                '[2001:19f0:feee::dead:beef:cafe]', 'xn--4ca9at.com',
+                '.multitenant.com', 'INSENSITIVE.com',
+                ]
+
+            # Check if X_FORWARDED_HOST is provided.
+            request = HttpRequest()
+            request.META = {
+                'HTTP_X_FORWARDED_HOST': 'forward.com',
+                'HTTP_HOST': 'example.com',
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 80,
+            }
+            # X_FORWARDED_HOST is ignored.
+            self.assertEqual(request.get_host(), 'example.com')
+
+            # Check if X_FORWARDED_HOST isn't provided.
+            request = HttpRequest()
+            request.META = {
+                'HTTP_HOST': 'example.com',
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 80,
+            }
+            self.assertEqual(request.get_host(), 'example.com')
+
+            # Check if HTTP_HOST isn't provided.
+            request = HttpRequest()
+            request.META = {
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 80,
+            }
+            self.assertEqual(request.get_host(), 'internal.com')
+
+            # Check if HTTP_HOST isn't provided, and we're on a nonstandard port
+            request = HttpRequest()
+            request.META = {
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 8042,
+            }
+            self.assertEqual(request.get_host(), 'internal.com:8042')
+
+            # Poisoned host headers are rejected as suspicious
+            legit_hosts = [
+                'example.com',
+                'example.com:80',
+                '12.34.56.78',
+                '12.34.56.78:443',
+                '[2001:19f0:feee::dead:beef:cafe]',
+                '[2001:19f0:feee::dead:beef:cafe]:8080',
+                'xn--4ca9at.com', # Punnycode for öäü.com
+                'anything.multitenant.com',
+                'multitenant.com',
+                'insensitive.com',
+            ]
+
+            poisoned_hosts = [
+                'example.com@evil.tld',
+                'example.com:dr.frankenstein@evil.tld',
+                'example.com:dr.frankenstein@evil.tld:80',
+                'example.com:80/badpath',
+                'example.com: recovermypassword.com',
+                'other.com', # not in ALLOWED_HOSTS
+            ]
+
+            for host in legit_hosts:
+                request = HttpRequest()
+                request.META = {
+                    'HTTP_HOST': host,
+                }
+                request.get_host()
+
+            for host in poisoned_hosts:
+                def _test():
+                    request = HttpRequest()
+                    request.META = {
+                        'HTTP_HOST': host,
+                    }
+                    request.get_host()
+                self.assertRaises(SuspiciousOperation, _test)
+        finally:
+            settings.ALLOWED_HOSTS = _old_ALLOWED_HOSTS
+            settings.USE_X_FORWARDED_HOST = _old_USE_X_FORWARDED_HOST
+
+    def test_http_get_host_with_x_forwarded_host(self):
+        _old_USE_X_FORWARDED_HOST = settings.USE_X_FORWARDED_HOST
+        _old_ALLOWED_HOSTS = settings.ALLOWED_HOSTS
+        try:
+            settings.USE_X_FORWARDED_HOST = True
+            settings.ALLOWED_HOSTS = ['*']
+
+            # Check if X_FORWARDED_HOST is provided.
+            request = HttpRequest()
+            request.META = {
+                'HTTP_X_FORWARDED_HOST': 'forward.com',
+                'HTTP_HOST': 'example.com',
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 80,
+            }
+            # X_FORWARDED_HOST is obeyed.
+            self.assertEqual(request.get_host(), 'forward.com')
+
+            # Check if X_FORWARDED_HOST isn't provided.
+            request = HttpRequest()
+            request.META = {
+                'HTTP_HOST': 'example.com',
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 80,
+            }
+            self.assertEqual(request.get_host(), 'example.com')
+
+            # Check if HTTP_HOST isn't provided.
+            request = HttpRequest()
+            request.META = {
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 80,
+            }
+            self.assertEqual(request.get_host(), 'internal.com')
+
+            # Check if HTTP_HOST isn't provided, and we're on a nonstandard port
+            request = HttpRequest()
+            request.META = {
+                'SERVER_NAME': 'internal.com',
+                'SERVER_PORT': 8042,
+            }
+            self.assertEqual(request.get_host(), 'internal.com:8042')
+
+            # Poisoned host headers are rejected as suspicious
+            legit_hosts = [
+                'example.com',
+                'example.com:80',
+                '12.34.56.78',
+                '12.34.56.78:443',
+                '[2001:19f0:feee::dead:beef:cafe]',
+                '[2001:19f0:feee::dead:beef:cafe]:8080',
+                'xn--4ca9at.com', # Punnycode for öäü.com
+            ]
+
+            poisoned_hosts = [
+                'example.com@evil.tld',
+                'example.com:dr.frankenstein@evil.tld',
+                'example.com:dr.frankenstein@evil.tld:80',
+                'example.com:80/badpath',
+                'example.com: recovermypassword.com',
+            ]
+
+            for host in legit_hosts:
+                request = HttpRequest()
+                request.META = {
+                    'HTTP_HOST': host,
+                }
+                request.get_host()
+
+            for host in poisoned_hosts:
+                def _test():
+                    request = HttpRequest()
+                    request.META = {
+                        'HTTP_HOST': host,
+                    }
+                    request.get_host()
+                self.assertRaises(SuspiciousOperation, _test)
+        finally:
+            settings.ALLOWED_HOSTS = _old_ALLOWED_HOSTS
+            settings.USE_X_FORWARDED_HOST = _old_USE_X_FORWARDED_HOST
+
+    def test_host_validation_disabled_in_debug_mode(self):
+        """If ALLOWED_HOSTS is empty and DEBUG is True, all hosts pass."""
+        _old_DEBUG = settings.DEBUG
+        _old_ALLOWED_HOSTS = settings.ALLOWED_HOSTS
+        try:
+            settings.DEBUG = True
+            settings.ALLOWED_HOSTS = []
+
+            request = HttpRequest()
+            request.META = {
+                'HTTP_HOST': 'example.com',
+            }
+            self.assertEqual(request.get_host(), 'example.com')
+        finally:
+            settings.DEBUG = _old_DEBUG
+            settings.ALLOWED_HOSTS = _old_ALLOWED_HOSTS
 
     def test_near_expiration(self):
         "Cookie will expire when an near expiration time is provided"
@@ -199,6 +390,27 @@ class RequestsTests(unittest.TestCase):
                                'wsgi.input': StringIO(payload)})
         self.assertEqual(request.POST, {u'name': [u'value']})
         self.assertRaises(Exception, lambda: request.raw_post_data)
+
+    def test_POST_multipart_with_content_length_zero(self):
+        """
+        Multipart POST requests with Content-Length >= 0 are valid and need to be handled.
+        """
+        # According to:
+        # http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.13
+        # Every request.POST with Content-Length >= 0 is a valid request,
+        # this test ensures that we handle Content-Length == 0.
+        payload = "\r\n".join([
+                '--boundary',
+                'Content-Disposition: form-data; name="name"',
+                '',
+                'value',
+                '--boundary--'
+                ''])
+        request = WSGIRequest({'REQUEST_METHOD': 'POST',
+                               'CONTENT_TYPE': 'multipart/form-data; boundary=boundary',
+                               'CONTENT_LENGTH': 0,
+                               'wsgi.input': StringIO(payload)})
+        self.assertEqual(request.POST, {})
 
     def test_read_by_lines(self):
         request = WSGIRequest({'REQUEST_METHOD': 'POST', 'wsgi.input': StringIO('name=value')})

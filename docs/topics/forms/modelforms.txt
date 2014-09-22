@@ -182,6 +182,8 @@ With these models, the ``ModelForm`` subclasses above would be roughly
 equivalent to this (the only difference being the ``save()`` method, which
 we'll discuss in a moment.)::
 
+    from django import forms
+
     class AuthorForm(forms.Form):
         name = forms.CharField(max_length=100)
         title = forms.CharField(max_length=3,
@@ -330,13 +332,17 @@ Since the Author model has only 3 fields, 'name', 'title', and
 .. note::
 
     If you specify ``fields`` or ``exclude`` when creating a form with
-    ``ModelForm``, then the fields that are not in the resulting form will not
-    be set by the form's ``save()`` method. Django will prevent any attempt to
-    save an incomplete model, so if the model does not allow the missing fields
-    to be empty, and does not provide a default value for the missing fields,
-    any attempt to ``save()`` a ``ModelForm`` with missing fields will fail.
-    To avoid this failure, you must instantiate your model with initial values
-    for the missing, but required fields::
+    ``ModelForm``, then the fields that are not in the resulting form
+    will not be set by the form's ``save()`` method. Also, if you
+    manually add the excluded fields back to the form, they will not
+    be initialized from the model instance.
+
+    Django will prevent any attempt to save an incomplete model, so if
+    the model does not allow the missing fields to be empty, and does
+    not provide a default value for the missing fields, any attempt to
+    ``save()`` a ``ModelForm`` with missing fields will fail.  To
+    avoid this failure, you must instantiate your model with initial
+    values for the missing, but required fields::
 
         author = Author(title='Mr')
         form = PartialAuthorForm(request.POST, instance=author)
@@ -631,6 +637,12 @@ database. If a given instance's data didn't change in the bound data, the
 instance won't be saved to the database and won't be included in the return
 value (``instances``, in the above example).
 
+When fields are missing from the form (for example because they have
+been excluded), these fields will not be set by the ``save()``
+method. You can find more information about this restriction, which
+also holds for regular ``ModelForms``, in `Using a subset of fields on
+the form`_.
+
 Pass ``commit=False`` to return the unsaved model instances::
 
     # don't save to the database
@@ -679,8 +691,8 @@ so long as the total number of forms does not exceed ``max_num``::
 
 .. versionchanged:: 1.2
 
-A ``max_num`` value of ``None`` (the default) puts no limit on the number of
-forms displayed.
+A ``max_num`` value of ``None`` (the default) puts a high limit on the number
+of forms displayed (1000). In practice this is equivalent to no limit.
 
 Using a model formset in a view
 -------------------------------

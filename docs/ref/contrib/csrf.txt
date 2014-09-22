@@ -96,7 +96,7 @@ that allow headers to be set on every request. In jQuery, you can use the
 
 .. code-block:: javascript
 
-    $('html').ajaxSend(function(event, xhr, settings) {
+    $(document).ajaxSend(function(event, xhr, settings) {
         function getCookie(name) {
             var cookieValue = null;
             if (document.cookie && document.cookie != '') {
@@ -112,11 +112,31 @@ that allow headers to be set on every request. In jQuery, you can use the
             }
             return cookieValue;
         }
-        if (!(/^http:.*/.test(settings.url) || /^https:.*/.test(settings.url))) {
-            // Only send the token to relative URLs i.e. locally.
+        function sameOrigin(url) {
+            // url could be relative or scheme relative or absolute
+            var host = document.location.host; // host + port
+            var protocol = document.location.protocol;
+            var sr_origin = '//' + host;
+            var origin = protocol + sr_origin;
+            // Allow absolute or scheme relative URLs to same origin
+            return (url == origin || url.slice(0, origin.length + 1) == origin + '/') ||
+                (url == sr_origin || url.slice(0, sr_origin.length + 1) == sr_origin + '/') ||
+                // or any other URL that isn't scheme relative or absolute i.e relative.
+                !(/^(\/\/|http:|https:).*/.test(url));
+        }
+        function safeMethod(method) {
+            return (/^(GET|HEAD|OPTIONS|TRACE)$/.test(method));
+        }
+
+        if (!safeMethod(settings.type) && sameOrigin(settings.url)) {
             xhr.setRequestHeader("X-CSRFToken", getCookie('csrftoken'));
         }
     });
+
+.. note::
+
+    Due to a bug introduced in jQuery 1.5, the example above will not work
+    correctly on that version. Make sure you are running at least jQuery 1.5.1.
 
 Adding this to a javascript file that is included on your site will ensure that
 AJAX POST requests that are made via jQuery will not be caught by the CSRF
@@ -393,15 +413,16 @@ middleware if it is used as instructed (``UpdateCacheMiddleware`` goes before
 all other middleware).
 
 However, if you use cache decorators on individual views, the CSRF middleware
-will not yet have been able to set the Vary header.  In this case, on any views
-that will require a CSRF token to be inserted you should use the
-:func:`django.views.decorators.vary.vary_on_cookie` decorator first::
+will not yet have been able to set the Vary header or the CSRF cookie, and the
+response will be cached without either one. In this case, on any views that
+will require a CSRF token to be inserted you should use the
+:func:`django.views.decorators.csrf.csrf_protect` decorator first::
 
   from django.views.decorators.cache import cache_page
-  from django.views.decorators.vary import vary_on_cookie
+  from django.views.decorators.csrf import csrf_protect
 
   @cache_page(60 * 15)
-  @vary_on_cookie
+  @csrf_protect
   def my_view(request):
       # ...
 

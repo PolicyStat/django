@@ -36,7 +36,8 @@ two test frameworks that ship in the Python standard library. The two
 frameworks are:
 
     * **Unit tests** -- tests that are expressed as methods on a Python class
-      that subclasses ``unittest.TestCase``. For example::
+      that subclasses ``unittest.TestCase`` or Django's customized
+      :class:`TestCase`. For example::
 
           import unittest
 
@@ -94,7 +95,7 @@ module defines tests in class-based approach.
 
         import unittest
 
-    If you want to continue to use the base unittest libary, you can --
+    If you want to continue to use the base unittest library, you can --
     you just won't get any of the nice new unittest2 features.
 
 .. _unittest2: http://pypi.python.org/pypi/unittest2
@@ -382,7 +383,7 @@ entirely!). If you want to use a different database name, specify
 Aside from using a separate database, the test runner will otherwise
 use all of the same database settings you have in your settings file:
 :setting:`ENGINE`, :setting:`USER`, :setting:`HOST`, etc. The test
-database is created by the user specified by ``USER``, so you'll need
+database is created by the user specified by :setting:`USER`, so you'll need
 to make sure that the given user account has sufficient privileges to
 create a new database on the system.
 
@@ -554,7 +555,7 @@ A full explanation of this error output is beyond the scope of this document,
 but it's pretty intuitive. You can consult the documentation of Python's
 ``unittest`` library for details.
 
-Note that the return code for the test-runner script is the total number of
+Note that the return code for the test-runner script is 1 for any number of
 failed and erroneous tests. If all the tests pass, the return code is 0. This
 feature is useful if you're using the test-runner script in a shell script and
 need to test for success or failure at that level.
@@ -708,6 +709,15 @@ arguments at time of construction:
         ...will send the HTTP header ``HTTP_X_REQUESTED_WITH`` to the
         details view, which is a good way to test code paths that use the
         :meth:`django.http.HttpRequest.is_ajax()` method.
+
+        .. admonition:: CGI specification
+
+            The headers sent via ``**extra`` should follow CGI_ specification.
+            For example, emulating a different "Host" header as sent in the
+            HTTP request from the browser to the server should be passed
+            as ``HTTP_HOST``. 
+
+            .. _CGI: http://www.w3.org/CGI/
 
         If you already have the GET arguments in URL-encoded form, you can
         use that encoding instead of using the data argument. For example,
@@ -1060,6 +1070,10 @@ restricted subset of the test client API:
       ``follows``. Since this is just a factory for producing
       requests, it's up to you to handle the response.
 
+    * It does not support middleware. Session and authentication
+      attributes must be supplied by the test itself if required
+      for the view to function properly.
+
 Example
 ~~~~~~~
 
@@ -1098,7 +1112,16 @@ Converting a normal ``unittest.TestCase`` to a Django ``TestCase`` is easy:
 just change the base class of your test from ``unittest.TestCase`` to
 ``django.test.TestCase``. All of the standard Python unit test functionality
 will continue to be available, but it will be augmented with some useful
-additions.
+additions, including:
+
+    * Automatic loading of fixtures.
+
+    * Wraps each test in a transaction.
+
+    * Creates a TestClient instance.
+
+    * Django-specific assertions for testing for things
+      like redirection and form errors.
 
 .. class:: TransactionTestCase()
 
@@ -1295,8 +1318,8 @@ In order to provide a reliable URL space for your test,
 ``django.test.TestCase`` provides the ability to customize the URLconf
 configuration for the duration of the execution of a test suite. If your
 ``TestCase`` instance defines an ``urls`` attribute, the ``TestCase`` will use
-the value of that attribute as the ``ROOT_URLCONF`` for the duration of that
-test.
+the value of that attribute as the :setting:`ROOT_URLCONF` for the duration
+of that test.
 
 For example::
 
@@ -1563,7 +1586,7 @@ skipUnlessDBFeature
 Skip the decorated test if the named database feature is *not*
 supported.
 
-For example, the following test will not be executed if the database
+For example, the following test will only be executed if the database
 supports transactions (e.g., it would run under PostgreSQL, but *not*
 under MySQL with MyISAM tables)::
 

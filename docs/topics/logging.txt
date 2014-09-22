@@ -156,7 +156,7 @@ and handle logging calls on a per-module basis. However, if you have
 some other way of organizing your logging messages, you can provide
 any dot-separated name to identify your logger::
 
-    # Get an instance of a specfic named logger
+    # Get an instance of a specific named logger
     logger = logging.getLogger('project.interesting.stuff')
 
 The dotted paths of logger names define a hierarchy. The
@@ -225,7 +225,7 @@ Since the loading of settings is one of the first things that Django
 does, you can be certain that loggers are always ready for use in your
 project code.
 
-.. _dictConfig format: http://docs.python.org/library/logging.html#configuration-dictionary-schema
+.. _dictConfig format: http://docs.python.org/library/logging.config.html#configuration-dictionary-schema
 
 .. _a third-party library: http://bitbucket.org/vinay.sajip/dictconfig
 
@@ -324,7 +324,7 @@ This logging configuration does the following things:
           higher message to ``/dev/null``.
 
         * ``console``, a StreamHandler, which will print any ``DEBUG``
-          message to stdout. This handler uses the `simple` output
+          message to stderr. This handler uses the `simple` output
           format.
 
         * ``mail_admins``, an AdminEmailHandler, which will e-mail any
@@ -486,7 +486,7 @@ Python logging module.
     The ``include_html`` argument of ``AdminEmailHandler`` is used to
     control whether the traceback e-mail includes an HTML attachment
     containing the full content of the debug Web page that would have been
-    produced if ``DEBUG`` were ``True``. To set this value in your
+    produced if :setting:`DEBUG` were ``True``. To set this value in your
     configuration, include it in the handler definition for
     ``django.utils.log.AdminEmailHandler``, like this::
 

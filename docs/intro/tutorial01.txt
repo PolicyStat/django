@@ -36,8 +36,13 @@ including database configuration, Django-specific options and
 application-specific settings.
 
 From the command line, ``cd`` into a directory where you'd like to store your
-code, then run the command ``django-admin.py startproject mysite``. This will
-create a ``mysite`` directory in your current directory.
+code, then run the following command:
+
+.. code-block:: bash
+
+   django-admin.py startproject mysite
+
+This will create a ``mysite`` directory in your current directory.
 
 .. admonition:: Script name may differ in distribution packages
 
@@ -54,7 +59,7 @@ create a ``mysite`` directory in your current directory.
    can be run as a program. To do this, open Terminal.app and navigate (using
    the ``cd`` command) to the directory where :doc:`django-admin.py
    </ref/django-admin>` is installed, then run the command
-   ``chmod +x django-admin.py``.
+   ``sudo chmod +x django-admin.py``.
 
 .. note::
 
@@ -168,11 +173,11 @@ module-level variables representing Django settings. Change the
 following keys in the :setting:`DATABASES` ``'default'`` item to match
 your databases connection settings.
 
-    * :setting:`ENGINE` -- Either
+    * :setting:`ENGINE <DATABASE-ENGINE>` -- Either
       ``'django.db.backends.postgresql_psycopg2'``,
       ``'django.db.backends.mysql'`` or
       ``'django.db.backends.sqlite3'``. Other backends are
-      :setting:`also available <ENGINE>`.
+      :setting:`also available <DATABASE-ENGINE>`.
 
     * :setting:`NAME` -- The name of your database. If you're using
       SQLite, the database will be a file on your computer; in that
@@ -593,7 +598,7 @@ automatically-generated admin.
     Unicode string, and ``str(p)`` will return a normal string, with characters
     encoded as UTF-8.
 
-    If all of this is jibberish to you, just remember to add
+    If all of this is gibberish to you, just remember to add
     :meth:`~django.db.models.Model.__unicode__` methods to your models. With any
     luck, things should Just Work for you.
 
@@ -687,10 +692,9 @@ Save these changes and start a new Python interactive shell by running
 
 For more information on model relations, see :doc:`Accessing related objects
 </ref/models/relations>`. For more on how to use double underscores to perform
-field lookups via the API, see `Field lookups`__. For full details on the 
-database API, see our :doc:`Database API reference </topics/db/queries>`.
-
-__ http://docs.djangoproject.com/en/1.2/topics/db/queries/#field-lookups
+field lookups via the API, see :ref:`Field lookups <field-lookups-intro>`. For
+full details on the database API, see our :doc:`Database API reference
+</topics/db/queries>`.
 
 When you're comfortable with the API, read :doc:`part 2 of this tutorial
 </intro/tutorial02>` to get Django's automatic admin working.

@@ -81,20 +81,20 @@ TemplateResponseMixin
         The response class to be returned by ``render_to_response`` method.
         Default is
         :class:`TemplateResponse <django.template.response.TemplateResponse>`.
-        The template and context of TemplateResponse instances can be
+        The template and context of ``TemplateResponse`` instances can be
         altered later (e.g. in
         :ref:`template response middleware <template-response-middleware>`).
 
-        Create TemplateResponse subclass and pass set it to
-        ``template_response_class`` if you need custom template loading or
-        custom context object instantiation.
+        If you need custom template loading or custom context object
+        instantiation, create a ``TemplateResponse`` subclass and assign it to
+        ``response_class``.
 
     .. method:: render_to_response(context, **response_kwargs)
 
-        Returns a ``self.template_response_class`` instance.
+        Returns a ``self.response_class`` instance.
 
         If any keyword arguments are provided, they will be
-        passed to the constructor of the response instance.
+        passed to the constructor of the response class.
 
         Calls :meth:`~TemplateResponseMixin.get_template_names()` to obtain the
         list of template names that will be searched looking for an existent
@@ -431,7 +431,7 @@ FormMixin
 
     .. method:: get_form_kwargs()
 
-        Build the keyword arguments requried to instanciate an the form.
+        Build the keyword arguments required to instantiate the form.
 
         The ``initial`` argument is set to :meth:`.get_initial`. If the
         request is a ``POST`` or ``PUT``, the request data (``request.POST``
@@ -781,11 +781,11 @@ BaseDateListView
 
     .. method:: get_dated_items():
 
-        Returns a 3-tuple containing (``date_list``, ``latest``,
+        Returns a 3-tuple containing (``date_list``, ``object_list``,
         ``extra_context``).
 
         ``date_list`` is the list of dates for which data is available.
-        ``object_list`` is the list of objects ``extra_context`` is a
+        ``object_list`` is the list of objects. ``extra_context`` is a
         dictionary of context data that will be added to any context data
         provided by the
         :class:`~django.views.generic.list.MultipleObjectMixin`.
@@ -1062,8 +1062,8 @@ DeleteView
 
     **Mixins**
 
-      * :class:`django.views.generic.edit.ModelFormMixin`
-      * :class:`django.views.generic.edit.ProcessFormView`
+      * :class:`django.views.generic.edit.DeletionMixin`
+      * :class:`django.views.generic.detail.BaseDetailView`
 
     **Notes**
 

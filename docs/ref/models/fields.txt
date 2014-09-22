@@ -607,9 +607,26 @@ instances on your model, the ``save()`` method is used to persist that file
 data.
 
 Takes two required arguments: ``name`` which is the name of the file, and
-``content`` which is a file-like object containing the file's contents. The
-optional ``save`` argument controls whether or not the instance is saved after
-the file has been altered. Defaults to ``True``.
+``content`` which is an object containing the file's contents.  The
+optional ``save`` argument controls whether or not the instance is
+saved after the file has been altered. Defaults to ``True``.
+
+Note that the ``content`` argument should be an instance of
+:class:`django.core.files.File`, not Python's built-in file object.
+You can construct a :class:`~django.core.files.File` from an existing
+Python file object like this::
+
+    from django.core.files import File
+    # Open an existing file using Python's built-in open()
+    f = open('/tmp/hello.world')
+    myfile = File(f)
+
+Or you can construct one from a Python string like this::
+
+    from django.core.files.base import ContentFile
+    myfile = ContentFile("hello world")
+
+For more information, see :doc:`/topics/files`.
 
 .. method:: FieldFile.delete(save=True)
 
@@ -814,14 +831,21 @@ shortcuts.
 ``URLField``
 ------------
 
-.. class:: URLField([verify_exists=True, max_length=200, **options])
+.. class:: URLField([verify_exists=False, max_length=200, **options])
 
 A :class:`CharField` for a URL. Has one extra optional argument:
 
+.. deprecated:: 1.3.1
+
+   ``verify_exists`` is deprecated for security reasons as of 1.3.1
+   and will be removed in 1.4. Prior to 1.3.1, the default value was
+   ``True``.
+
 .. attribute:: URLField.verify_exists
 
-    If ``True`` (the default), the URL given will be checked for existence
-    (i.e., the URL actually loads and doesn't give a 404 response).
+    If ``True``, the URL given will be checked for existence (i.e.,
+    the URL actually loads and doesn't give a 404 response) using a
+    ``HEAD`` request. Redirects are allowed, but will not be followed.
 
     Note that when you're using the single-threaded development server,
     validating a URL being served by the same server will hang. This should not

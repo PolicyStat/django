@@ -292,7 +292,7 @@ Manager functions
         The :attr:`~django.contrib.auth.models.User.username` and
         :attr:`~django.contrib.auth.models.User.password` are set as given. The
         domain portion of :attr:`~django.contrib.auth.models.User.email` is
-        automatically convered to lowercase, and the returned
+        automatically converted to lowercase, and the returned
         :class:`~django.contrib.auth.models.User` object will have
         :attr:`~models.User.is_active` set to ``True``.
 
@@ -476,8 +476,8 @@ profile" -- for this purpose.
 To make use of this feature, define a model with fields for the
 additional information you'd like to store, or additional methods
 you'd like to have available, and also add a
-:class:`~django.db.models.Field.OneToOneField` from your model to the
-:class:`~django.contrib.auth.models.User` model. This will ensure only
+:class:`~django.db.models.Field.OneToOneField` named ``user`` from your model
+to the :class:`~django.contrib.auth.models.User` model. This will ensure only
 one instance of your model can be created for each
 :class:`~django.contrib.auth.models.User`.
 
@@ -982,32 +982,15 @@ includes a few other useful built-in views located in
 
 .. function:: password_reset_done(request[, template_name])
 
-    The page shown after a user has reset their password.
+    The page shown after a user has been emailed a link to reset their
+    password. This view is called by default if the :func:`password_reset` view
+    doesn't have an explicit ``post_reset_redirect`` URL set.
 
     **Optional arguments:**
 
         * ``template_name``: The full name of a template to use. This will
           default to :file:`registration/password_reset_done.html` if not
           supplied.
-
-.. function:: redirect_to_login(next[, login_url, redirect_field_name])
-
-    Redirects to the login page, and then back to another URL after a
-    successful login.
-
-    **Required arguments:**
-
-        * ``next``: The URL to redirect to after a successful login.
-
-    **Optional arguments:**
-
-        * ``login_url``: The URL of the login page to redirect to. This will
-          default to :setting:`settings.LOGIN_URL <LOGIN_URL>` if not supplied.
-
-        * ``redirect_field_name``: The name of a ``GET`` field containing the
-          URL to redirect to after log out. Overrides ``next`` if the given
-          ``GET`` parameter is passed.
-
 
 .. function:: password_reset_confirm(request[, uidb36, token, template_name, token_generator, set_password_form, post_reset_redirect])
 
@@ -1037,6 +1020,29 @@ includes a few other useful built-in views located in
 
        * ``template_name``: The full name of a template to display the view.
          This will default to :file:`registration/password_reset_complete.html`.
+
+Helper functions
+----------------
+
+.. currentmodule:: django.contrib.auth.views
+
+.. function:: redirect_to_login(next[, login_url, redirect_field_name])
+
+    Redirects to the login page, and then back to another URL after a
+    successful login.
+
+    **Required arguments:**
+
+        * ``next``: The URL to redirect to after a successful login.
+
+    **Optional arguments:**
+
+        * ``login_url``: The URL of the login page to redirect to. This will
+          default to :setting:`settings.LOGIN_URL <LOGIN_URL>` if not supplied.
+
+        * ``redirect_field_name``: The name of a ``GET`` field containing the
+          URL to redirect to after log out. Overrides ``next`` if the given
+          ``GET`` parameter is passed.
 
 Built-in forms
 --------------
@@ -1168,9 +1174,16 @@ The permission_required decorator
 Limiting access to generic views
 --------------------------------
 
-To limit access to a :doc:`generic view </ref/generic-views>`, write a thin
-wrapper around the view, and point your URLconf to your wrapper instead of the
-generic view itself. For example::
+Controlling access to a :doc:`class-based generic view </ref/class-based-views>`
+is done by decorating the :meth:`View.dispatch <django.views.generic.base.View.dispatch>`
+method on the class. See :ref:`decorating-class-based-views` for the details.
+
+Function-based generic views
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+To limit access to a :doc:`function-based generic view </ref/generic-views>`,
+write a thin wrapper around the view, and point your URLconf to your wrapper
+instead of the generic view itself. For example::
 
     from django.views.generic.date_based import object_detail
 
@@ -1239,22 +1252,25 @@ To create custom permissions for a given model object, use the ``permissions``
 :ref:`model Meta attribute <meta-options>`.
 
 This example Task model creates three custom permissions, i.e., actions users
-can or cannot do with Task instances, specific to your appication::
+can or cannot do with Task instances, specific to your application::
 
     class Task(models.Model):
         ...
         class Meta:
             permissions = (
-                ("can_view", "Can see available tasks"),
-                ("can_change_status", "Can change the status of tasks"),
-                ("can_close", "Can remove a task by setting its status as closed"),
+                ("view_task", "Can see available tasks"),
+                ("change_task_status", "Can change the status of tasks"),
+                ("close_task", "Can remove a task by setting its status as closed"),
             )
 
 The only thing this does is create those extra permissions when you run
 :djadmin:`manage.py syncdb <syncdb>`. Your code is in charge of checking the
 value of these permissions when an user is trying to access the functionality
 provided by the application (viewing tasks, changing the status of tasks,
-closing tasks.)
+closing tasks.) Continuing the above example, the following checks if a user may
+view tasks::
+
+    user.has_perm('app.view_task')
 
 API reference
 -------------
@@ -1502,8 +1518,9 @@ processing at the first positive match.
 
     Once a user has authenticated, Django stores which backend was used to
     authenticate the user in the user's session, and re-uses the same backend
-    for subsequent authentication attempts for that user. This effectively means
-    that authentication sources are cached, so if you change
+    for the duration of that session whenever access to the currently
+    authenticated user is needed. This effectively means that authentication
+    sources are cached on a per-session basis, so if you change
     :setting:`AUTHENTICATION_BACKENDS`, you'll need to clear out session data if
     you need to force users to re-authenticate using different methods. A simple
     way to do that is simply to execute ``Session.objects.all().delete()``.

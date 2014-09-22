@@ -147,12 +147,14 @@ Storage engines
 MySQL has several `storage engines`_ (previously called table types). You can
 change the default storage engine in the server configuration.
 
-The default engine is MyISAM_ [#]_. The main drawback of MyISAM is that it
-doesn't currently support transactions or foreign keys. On the plus side, it's
-currently the only engine that supports full-text indexing and searching.
+Until MySQL 5.5.4, the default engine was MyISAM_ [#]_. The main drawbacks of
+MyISAM are that it doesn't support transactions or enforce foreign keys
+constraints. On the plus side, it's currently the only engine that supports
+full-text indexing and searching.
 
-The InnoDB_ engine is fully transactional and supports foreign key references
-and is probably the best choice at this point in time.
+Since MySQL 5.5.5, the default storage engine is InnoDB_. This engine is fully
+transactional and supports foreign key references. It's probably the best
+choice at this point in time.
 
 .. _storage engines: http://dev.mysql.com/doc/refman/5.5/en/storage-engines.html
 .. _MyISAM: http://dev.mysql.com/doc/refman/5.5/en/myisam-storage-engine.html
@@ -262,8 +264,8 @@ Connection settings are used in this order:
        :setting:`HOST`, :setting:`PORT`
     3. MySQL option files.
 
-In other words, if you set the name of the database in ``OPTIONS``,
-this will take precedence over ``NAME``, which would override
+In other words, if you set the name of the database in :setting:`OPTIONS`,
+this will take precedence over :setting:`NAME`, which would override
 anything in a `MySQL option file`_.
 
 Here's a sample configuration which uses a MySQL option file::
@@ -551,7 +553,7 @@ Your Django settings.py file should look something like this for Oracle::
 
 If you don't use a ``tnsnames.ora`` file or a similar naming method that
 recognizes the SID ("xe" in this example), then fill in both
-``HOST`` and ``PORT`` like so::
+:setting:`HOST` and :setting:`PORT` like so::
 
     DATABASES = {
         'default': {
@@ -564,7 +566,7 @@ recognizes the SID ("xe" in this example), then fill in both
         }
     }
 
-You should supply both ``HOST`` and ``PORT``, or leave both
+You should supply both :setting:`HOST` and :setting:`PORT`, or leave both
 as empty strings.
 
 Threaded option
