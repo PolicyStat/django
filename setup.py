@@ -65,6 +65,9 @@ if len(sys.argv) > 1 and sys.argv[1] == 'bdist_wininst':
     for file_info in data_files:
         file_info[0] = '\\PURELIB\\%s' % file_info[0]
 
+if 'bdist_wheel' in sys.argv:
+    raise RuntimeError('Django 1.4 does not support wheel. This error is safe to ignore.')
+
 # Dynamically calculate the version based on django.VERSION.
 version = __import__('django').get_version()
 
@@ -75,7 +78,7 @@ setup(
     author = 'Django Software Foundation',
     author_email = 'foundation@djangoproject.com',
     description = 'A high-level Python Web framework that encourages rapid development and clean, pragmatic design.',
-    download_url = 'https://www.djangoproject.com/m/releases/1.4/Django-1.4.21.tar.gz',
+    download_url = 'https://www.djangoproject.com/m/releases/1.4/Django-1.4.22.tar.gz',
     packages = packages,
     cmdclass = cmdclasses,
     data_files = data_files,
