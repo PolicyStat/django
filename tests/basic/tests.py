@@ -1,19 +1,22 @@
 from __future__ import unicode_literals
 
-from datetime import datetime
 import threading
+import warnings
+from datetime import datetime, timedelta
 
-from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
-from django.db import connections, DEFAULT_DB_ALIAS
-from django.db import DatabaseError
+from django.core.exceptions import MultipleObjectsReturned, ObjectDoesNotExist
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections
 from django.db.models.fields import Field
+from django.db.models.fields.related import ForeignObjectRel
 from django.db.models.manager import BaseManager
-from django.db.models.query import QuerySet, EmptyQuerySet, ValuesListQuerySet, MAX_GET_RESULTS
-from django.test import TestCase, TransactionTestCase, skipIfDBFeature, skipUnlessDBFeature
+from django.db.models.query import EmptyQuerySet, QuerySet, ValuesListQuerySet
+from django.test import (
+    TestCase, TransactionTestCase, skipIfDBFeature, skipUnlessDBFeature,
+)
 from django.utils import six
 from django.utils.translation import ugettext_lazy
 
-from .models import Article, SelfRef, ArticleSelectOnSave
+from .models import Article, ArticleSelectOnSave, SelfRef
 
 
 class ModelInstanceCreationTests(TestCase):
@@ -176,30 +179,6 @@ class ModelTest(TestCase):
 
         self.assertNotEqual(Article.objects.get(id__exact=a1.id), Article.objects.get(id__exact=a2.id))
 
-    def test_multiple_objects_max_num_fetched(self):
-        """
-        #6785 - get() should fetch a limited number of results.
-        """
-        Article.objects.bulk_create(
-            Article(headline='Area %s' % i, pub_date=datetime(2005, 7, 28))
-            for i in range(MAX_GET_RESULTS)
-        )
-        six.assertRaisesRegex(
-            self,
-            MultipleObjectsReturned,
-            "get\(\) returned more than one Article -- it returned %d!" % MAX_GET_RESULTS,
-            Article.objects.get,
-            headline__startswith='Area',
-        )
-        Article.objects.create(headline='Area %s' % MAX_GET_RESULTS, pub_date=datetime(2005, 7, 28))
-        six.assertRaisesRegex(
-            self,
-            MultipleObjectsReturned,
-            "get\(\) returned more than one Article -- it returned more than %d!" % MAX_GET_RESULTS,
-            Article.objects.get,
-            headline__startswith='Area',
-        )
-
     @skipUnlessDBFeature('supports_microsecond_precision')
     def test_microsecond_precision(self):
         # In PostgreSQL, microsecond-level precision is available.
@@ -213,15 +192,30 @@ class ModelTest(TestCase):
 
     @skipIfDBFeature('supports_microsecond_precision')
     def test_microsecond_precision_not_supported(self):
-        # In MySQL, microsecond-level precision isn't available. You'll lose
-        # microsecond-level precision once the data is saved.
+        # In MySQL, microsecond-level precision isn't always available. You'll
+        # lose microsecond-level precision once the data is saved.
         a9 = Article(
             headline='Article 9',
             pub_date=datetime(2005, 7, 31, 12, 30, 45, 180),
         )
         a9.save()
-        self.assertEqual(Article.objects.get(id__exact=a9.id).pub_date,
-            datetime(2005, 7, 31, 12, 30, 45))
+        self.assertEqual(
+            Article.objects.get(id__exact=a9.id).pub_date,
+            datetime(2005, 7, 31, 12, 30, 45),
+        )
+
+    @skipIfDBFeature('supports_microsecond_precision')
+    def test_microsecond_precision_not_supported_edge_case(self):
+        # In MySQL, microsecond-level precision isn't always available. You'll
+        # lose microsecond-level precision once the data is saved.
+        a = Article.objects.create(
+            headline='Article',
+            pub_date=datetime(2008, 12, 31, 23, 59, 59, 999999),
+        )
+        self.assertEqual(
+            Article.objects.get(pk=a.pk).pub_date,
+            datetime(2008, 12, 31, 23, 59, 59),
+        )
 
     def test_manually_specify_primary_key(self):
         # You can manually specify the primary key when creating a new object.
@@ -355,7 +349,7 @@ class ModelTest(TestCase):
         Article.objects.create(headline=lazy, pub_date=datetime.now())
         article = Article.objects.get()
         self.assertEqual(article.headline, notlazy)
-        # test that assign + save works with Promise objecs
+        # test that assign + save works with Promise objects
         article.headline = lazy
         article.save()
         self.assertEqual(article.headline, notlazy)
@@ -713,3 +707,91 @@ class SelectOnSaveTests(TestCase):
                 asos.save(update_fields=['pub_date'])
         finally:
             Article._base_manager.__class__ = orig_class
+
+
+class ModelRefreshTests(TestCase):
+    def _truncate_ms(self, val):
+        # MySQL < 5.6.4 removes microseconds from the datetimes which can cause
+        # problems when comparing the original value to that loaded from DB
+        return val - timedelta(microseconds=val.microsecond)
+
+    def test_refresh(self):
+        a = Article.objects.create(pub_date=self._truncate_ms(datetime.now()))
+        Article.objects.create(pub_date=self._truncate_ms(datetime.now()))
+        Article.objects.filter(pk=a.pk).update(headline='new headline')
+        with self.assertNumQueries(1):
+            a.refresh_from_db()
+            self.assertEqual(a.headline, 'new headline')
+
+        orig_pub_date = a.pub_date
+        new_pub_date = a.pub_date + timedelta(10)
+        Article.objects.update(headline='new headline 2', pub_date=new_pub_date)
+        with self.assertNumQueries(1):
+            a.refresh_from_db(fields=['headline'])
+            self.assertEqual(a.headline, 'new headline 2')
+            self.assertEqual(a.pub_date, orig_pub_date)
+        with self.assertNumQueries(1):
+            a.refresh_from_db()
+            self.assertEqual(a.pub_date, new_pub_date)
+
+    def test_refresh_fk(self):
+        s1 = SelfRef.objects.create()
+        s2 = SelfRef.objects.create()
+        s3 = SelfRef.objects.create(selfref=s1)
+        s3_copy = SelfRef.objects.get(pk=s3.pk)
+        s3_copy.selfref.touched = True
+        s3.selfref = s2
+        s3.save()
+        with self.assertNumQueries(1):
+            s3_copy.refresh_from_db()
+        with self.assertNumQueries(1):
+            # The old related instance was thrown away (the selfref_id has
+            # changed). It needs to be reloaded on access, so one query
+            # executed.
+            self.assertFalse(hasattr(s3_copy.selfref, 'touched'))
+            self.assertEqual(s3_copy.selfref, s2)
+
+    def test_refresh_null_fk(self):
+        s1 = SelfRef.objects.create()
+        s2 = SelfRef.objects.create(selfref=s1)
+        s2.selfref = None
+        s2.refresh_from_db()
+        self.assertEqual(s2.selfref, s1)
+
+    def test_refresh_unsaved(self):
+        pub_date = self._truncate_ms(datetime.now())
+        a = Article.objects.create(pub_date=pub_date)
+        a2 = Article(id=a.pk)
+        with self.assertNumQueries(1):
+            a2.refresh_from_db()
+        self.assertEqual(a2.pub_date, pub_date)
+        self.assertEqual(a2._state.db, "default")
+
+    def test_refresh_fk_on_delete_set_null(self):
+        a = Article.objects.create(
+            headline='Parrot programs in Python',
+            pub_date=datetime(2005, 7, 28),
+        )
+        s1 = SelfRef.objects.create(article=a)
+        a.delete()
+        s1.refresh_from_db()
+        self.assertIsNone(s1.article_id)
+        self.assertIsNone(s1.article)
+
+    def test_refresh_no_fields(self):
+        a = Article.objects.create(pub_date=self._truncate_ms(datetime.now()))
+        with self.assertNumQueries(0):
+            a.refresh_from_db(fields=[])
+
+
+class TestRelatedObjectDeprecation(TestCase):
+    def test_field_related_deprecation(self):
+        field = SelfRef._meta.get_field('selfref')
+        with warnings.catch_warnings(record=True) as warns:
+            warnings.simplefilter('always')
+            self.assertIsInstance(field.related, ForeignObjectRel)
+            self.assertEqual(len(warns), 1)
+            self.assertEqual(
+                str(warns.pop().message),
+                'Usage of field.related has been deprecated. Use field.rel instead.'
+            )

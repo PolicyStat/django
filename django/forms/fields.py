@@ -16,28 +16,30 @@ from io import BytesIO
 
 from django.core import validators
 from django.core.exceptions import ValidationError
+# Provide this import for backwards compatibility.
+from django.core.validators import EMPTY_VALUES  # NOQA
 from django.forms.utils import from_current_timezone, to_current_timezone
 from django.forms.widgets import (
-    TextInput, NumberInput, EmailInput, URLInput, HiddenInput,
-    MultipleHiddenInput, ClearableFileInput, CheckboxInput, Select,
-    NullBooleanSelect, SelectMultiple, DateInput, DateTimeInput, TimeInput,
-    SplitDateTimeWidget, SplitHiddenDateTimeWidget, FILE_INPUT_CONTRADICTION
+    FILE_INPUT_CONTRADICTION, CheckboxInput, ClearableFileInput, DateInput,
+    DateTimeInput, EmailInput, HiddenInput, MultipleHiddenInput,
+    NullBooleanSelect, NumberInput, Select, SelectMultiple,
+    SplitDateTimeWidget, SplitHiddenDateTimeWidget, TextInput, TimeInput,
+    URLInput,
 )
-from django.utils import formats
-from django.utils.encoding import smart_text, force_str, force_text
+from django.utils import formats, six
+from django.utils.dateparse import parse_duration
+from django.utils.deprecation import (
+    RemovedInDjango19Warning, RemovedInDjango110Warning, RenameMethodsBase,
+)
+from django.utils.duration import duration_string
+from django.utils.encoding import force_str, force_text, smart_text
 from django.utils.ipv6 import clean_ipv6_address
-from django.utils.deprecation import RemovedInDjango19Warning, RemovedInDjango20Warning, RenameMethodsBase
-from django.utils import six
 from django.utils.six.moves.urllib.parse import urlsplit, urlunsplit
 from django.utils.translation import ugettext_lazy as _, ungettext_lazy
 
-# Provide this import for backwards compatibility.
-from django.core.validators import EMPTY_VALUES  # NOQA
-
-
 __all__ = (
     'Field', 'CharField', 'IntegerField',
-    'DateField', 'TimeField', 'DateTimeField',
+    'DateField', 'TimeField', 'DateTimeField', 'DurationField',
     'RegexField', 'EmailField', 'FileField', 'ImageField', 'URLField',
     'BooleanField', 'NullBooleanField', 'ChoiceField', 'MultipleChoiceField',
     'ComboField', 'MultiValueField', 'FloatField', 'DecimalField',
@@ -48,7 +50,7 @@ __all__ = (
 
 class RenameFieldMethods(RenameMethodsBase):
     renamed_methods = (
-        ('_has_changed', 'has_changed', RemovedInDjango20Warning),
+        ('_has_changed', 'has_changed', RemovedInDjango110Warning),
     )
 
 
@@ -518,6 +520,27 @@ class DateTimeField(BaseTemporalField):
         return datetime.datetime.strptime(force_str(value), format)
 
 
+class DurationField(Field):
+    default_error_messages = {
+        'invalid': _('Enter a valid duration.'),
+    }
+
+    def prepare_value(self, value):
+        if isinstance(value, datetime.timedelta):
+            return duration_string(value)
+        return value
+
+    def to_python(self, value):
+        if value in self.empty_values:
+            return None
+        if isinstance(value, datetime.timedelta):
+            return value
+        value = parse_duration(value)
+        if value is None:
+            raise ValidationError(self.error_messages['invalid'], code='invalid')
+        return value
+
+
 class RegexField(CharField):
     def __init__(self, regex, max_length=None, min_length=None, error_message=None, *args, **kwargs):
         """
@@ -530,7 +553,7 @@ class RegexField(CharField):
             warnings.warn(
                 "The 'error_message' argument is deprecated. Use "
                 "Field.error_messages['invalid'] instead.",
-                RemovedInDjango20Warning, stacklevel=2
+                RemovedInDjango110Warning, stacklevel=2
             )
             error_messages = kwargs.get('error_messages') or {}
             error_messages['invalid'] = error_message
@@ -669,7 +692,9 @@ class ImageField(FileField):
 
             # Annotating so subclasses can reuse it for their own validation
             f.image = image
-            f.content_type = Image.MIME[image.format]
+            # Pillow doesn't detect the MIME type of all formats. In those
+            # cases, content_type will be None.
+            f.content_type = Image.MIME.get(image.format)
         except Exception:
             # Pillow doesn't recognize it as an image.
             six.reraise(ValidationError, ValidationError(
@@ -1028,7 +1053,7 @@ class MultiValueField(Field):
 
     def __deepcopy__(self, memo):
         result = super(MultiValueField, self).__deepcopy__(memo)
-        result.fields = tuple([x.__deepcopy__(memo) for x in self.fields])
+        result.fields = tuple(x.__deepcopy__(memo) for x in self.fields)
         return result
 
     def validate(self, value):
@@ -1104,7 +1129,11 @@ class MultiValueField(Field):
             if not isinstance(initial, list):
                 initial = self.widget.decompress(initial)
         for field, initial, data in zip(self.fields, initial, data):
-            if field.has_changed(field.to_python(initial), data):
+            try:
+                initial = field.to_python(initial)
+            except ValidationError:
+                return True
+            if field.has_changed(initial, data):
                 return True
         return False
 

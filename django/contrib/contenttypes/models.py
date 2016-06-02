@@ -1,22 +1,27 @@
 from __future__ import unicode_literals
 
+import warnings
+
 from django.apps import apps
 from django.db import models
-from django.db.utils import OperationalError, ProgrammingError
+from django.db.utils import IntegrityError, OperationalError, ProgrammingError
+from django.utils.deprecation import RemovedInDjango110Warning
+from django.utils.encoding import force_text, python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
-from django.utils.encoding import smart_text, force_text
-from django.utils.encoding import python_2_unicode_compatible
 
 
 class ContentTypeManager(models.Manager):
+    use_in_migrations = True
 
-    # Cache to avoid re-looking up ContentType objects all over the place.
-    # This cache is shared by all the get_for_* methods.
-    _cache = {}
+    def __init__(self, *args, **kwargs):
+        super(ContentTypeManager, self).__init__(*args, **kwargs)
+        # Cache shared by all the get_for_* methods to speed up
+        # ContentType retrieval.
+        self._cache = {}
 
     def get_by_natural_key(self, app_label, model):
         try:
-            ct = self.__class__._cache[self.db][(app_label, model)]
+            ct = self._cache[self.db][(app_label, model)]
         except KeyError:
             ct = self.get(app_label=app_label, model=model)
             self._add_to_cache(self.db, ct)
@@ -31,7 +36,15 @@ class ContentTypeManager(models.Manager):
 
     def _get_from_cache(self, opts):
         key = (opts.app_label, opts.model_name)
-        return self.__class__._cache[self.db][key]
+        return self._cache[self.db][key]
+
+    def create(self, **kwargs):
+        if 'name' in kwargs:
+            del kwargs['name']
+            warnings.warn(
+                "ContentType.name field doesn't exist any longer. Please remove it from your code.",
+                RemovedInDjango110Warning, stacklevel=2)
+        return super(ContentTypeManager, self).create(**kwargs)
 
     def get_for_model(self, model, for_concrete_model=True):
         """
@@ -48,26 +61,24 @@ class ContentTypeManager(models.Manager):
         # The ContentType entry was not found in the cache, therefore we
         # proceed to load or create it.
         try:
-            # We start with get() and not get_or_create() in order to use
-            # the db_for_read (see #20401).
-            ct = self.get(app_label=opts.app_label, model=opts.model_name)
-        except (OperationalError, ProgrammingError):
+            try:
+                # We start with get() and not get_or_create() in order to use
+                # the db_for_read (see #20401).
+                ct = self.get(app_label=opts.app_label, model=opts.model_name)
+            except self.model.DoesNotExist:
+                # Not found in the database; we proceed to create it.  This time we
+                # use get_or_create to take care of any race conditions.
+                ct, created = self.get_or_create(
+                    app_label=opts.app_label,
+                    model=opts.model_name,
+                )
+        except (OperationalError, ProgrammingError, IntegrityError):
             # It's possible to migrate a single app before contenttypes,
             # as it's not a required initial dependency (it's contrib!)
             # Have a nice error for this.
             raise RuntimeError(
                 "Error creating new content types. Please make sure contenttypes "
                 "is migrated before trying to migrate apps individually."
-            )
-        except self.model.DoesNotExist:
-            # Not found in the database; we proceed to create it.  This time we
-            # use get_or_create to take care of any race conditions.
-            # The smart_text() is needed around opts.verbose_name_raw because
-            # name_raw might be a django.utils.functional.__proxy__ object.
-            ct, created = self.get_or_create(
-                app_label=opts.app_label,
-                model=opts.model_name,
-                defaults={'name': smart_text(opts.verbose_name_raw)},
             )
         self._add_to_cache(self.db, ct)
         return ct
@@ -109,7 +120,6 @@ class ContentTypeManager(models.Manager):
             ct = self.create(
                 app_label=opts.app_label,
                 model=opts.model_name,
-                name=smart_text(opts.verbose_name_raw),
             )
             self._add_to_cache(self.db, ct)
             results[ct.model_class()] = ct
@@ -121,7 +131,7 @@ class ContentTypeManager(models.Manager):
         (though ContentTypes are obviously not created on-the-fly by get_by_id).
         """
         try:
-            ct = self.__class__._cache[self.db][id]
+            ct = self._cache[self.db][id]
         except KeyError:
             # This could raise a DoesNotExist; that's correct behavior and will
             # make sure that only correct ctypes get stored in the cache dict.
@@ -136,20 +146,19 @@ class ContentTypeManager(models.Manager):
         django.contrib.contenttypes.management.update_contenttypes for where
         this gets called).
         """
-        self.__class__._cache.clear()
+        self._cache.clear()
 
     def _add_to_cache(self, using, ct):
         """Insert a ContentType into the cache."""
         # Note it's possible for ContentType objects to be stale; model_class() will return None.
         # Hence, there is no reliance on model._meta.app_label here, just using the model fields instead.
         key = (ct.app_label, ct.model)
-        self.__class__._cache.setdefault(using, {})[key] = ct
-        self.__class__._cache.setdefault(using, {})[ct.id] = ct
+        self._cache.setdefault(using, {})[key] = ct
+        self._cache.setdefault(using, {})[ct.id] = ct
 
 
 @python_2_unicode_compatible
 class ContentType(models.Model):
-    name = models.CharField(max_length=100)
     app_label = models.CharField(max_length=100)
     model = models.CharField(_('python model class name'), max_length=100)
     objects = ContentTypeManager()
@@ -158,22 +167,17 @@ class ContentType(models.Model):
         verbose_name = _('content type')
         verbose_name_plural = _('content types')
         db_table = 'django_content_type'
-        ordering = ('name',)
         unique_together = (('app_label', 'model'),)
 
     def __str__(self):
-        # self.name is deprecated in favor of using model's verbose_name, which
-        # can be translated. Formal deprecation is delayed until we have DB
-        # migration to be able to remove the field from the database along with
-        # the attribute.
-        #
-        # We return self.name only when users have changed its value from the
-        # initial verbose_name_raw and might rely on it.
+        return self.name
+
+    @property
+    def name(self):
         model = self.model_class()
-        if not model or self.name != model._meta.verbose_name_raw:
-            return self.name
-        else:
-            return force_text(model._meta.verbose_name)
+        if not model:
+            return self.model
+        return force_text(model._meta.verbose_name)
 
     def model_class(self):
         "Returns the Python model class for this type of content."

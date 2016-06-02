@@ -1,14 +1,18 @@
 from __future__ import unicode_literals
 
 import os
+import tempfile
 import warnings
 
+from django.apps import apps
 from django.contrib.sites.models import Site
 from django.core import management
-from django.db import connection, IntegrityError
-from django.test import TestCase, TransactionTestCase, skipUnlessDBFeature
-from django.utils.encoding import force_text
+from django.db import IntegrityError, connection
+from django.test import (
+    TestCase, TransactionTestCase, ignore_warnings, mock, skipUnlessDBFeature,
+)
 from django.utils import six
+from django.utils.encoding import force_text
 
 from .models import Article, Book, Spy, Tag, Visa
 
@@ -43,6 +47,8 @@ class DumpDataAssertMixin(object):
                          natural_foreign_keys=False, natural_primary_keys=False,
                          use_base_manager=False, exclude_list=[], primary_keys=''):
         new_io = six.StringIO()
+        if filename:
+            filename = os.path.join(tempfile.gettempdir(), filename)
         management.call_command('dumpdata', *args, **{'format': format,
                                                       'stdout': new_io,
                                                       'stderr': new_io,
@@ -76,6 +82,7 @@ class FixtureLoadingTests(DumpDataAssertMixin, TestCase):
         ])
 
     def test_loading_and_dumping(self):
+        apps.clear_cache()
         Site.objects.all().delete()
         # Load fixture 1. Single JSON file, with two objects.
         management.call_command('loaddata', 'fixture1.json', verbosity=0)
@@ -335,14 +342,12 @@ class FixtureLoadingTests(DumpDataAssertMixin, TestCase):
             management.call_command('loaddata', 'invalid.json', verbosity=0)
             self.assertIn("Could not load fixtures.Article(pk=1):", cm.exception.args[0])
 
+    @ignore_warnings(category=UserWarning, message="No fixture named")
     def test_loaddata_app_option(self):
         """
         Verifies that the --app option works.
         """
-        with warnings.catch_warnings():
-            # Ignore: No fixture named ...
-            warnings.filterwarnings("ignore", category=UserWarning)
-            management.call_command('loaddata', 'db_fixture_1', verbosity=0, app_label="someotherapp")
+        management.call_command('loaddata', 'db_fixture_1', verbosity=0, app_label="someotherapp")
         self.assertQuerysetEqual(Article.objects.all(), [])
         management.call_command('loaddata', 'db_fixture_1', verbosity=0, app_label="fixtures")
         self.assertQuerysetEqual(Article.objects.all(), [
@@ -358,12 +363,11 @@ class FixtureLoadingTests(DumpDataAssertMixin, TestCase):
             '<Article: Who needs to use compressed data?>',
         ])
 
+    @ignore_warnings(category=UserWarning, message="No fixture named")
     def test_unmatched_identifier_loading(self):
         # Try to load db fixture 3. This won't load because the database identifier doesn't match
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=UserWarning)
-            management.call_command('loaddata', 'db_fixture_3', verbosity=0)
-            management.call_command('loaddata', 'db_fixture_3', verbosity=0, using='default')
+        management.call_command('loaddata', 'db_fixture_3', verbosity=0)
+        management.call_command('loaddata', 'db_fixture_3', verbosity=0, using='default')
         self.assertQuerysetEqual(Article.objects.all(), [])
 
     def test_output_formats(self):
@@ -412,6 +416,18 @@ class NonExistentFixtureTests(TestCase):
         with warnings.catch_warnings(record=True) as w:
             management.call_command('loaddata', 'initial_data.json', verbosity=0)
         self.assertEqual(len(w), 0)
+
+    @mock.patch('django.db.connection.enable_constraint_checking')
+    @mock.patch('django.db.connection.disable_constraint_checking')
+    def test_nonexistent_fixture_no_constraint_checking(self,
+            disable_constraint_checking, enable_constraint_checking):
+        """
+        If no fixtures match the loaddata command, constraints checks on the
+        database shouldn't be disabled. This is performance critical on MSSQL.
+        """
+        management.call_command('loaddata', 'this_fixture_doesnt_exist', verbosity=0)
+        disable_constraint_checking.assert_not_called()
+        enable_constraint_checking.assert_not_called()
 
 
 class FixtureTransactionTests(DumpDataAssertMixin, TransactionTestCase):

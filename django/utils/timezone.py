@@ -4,19 +4,20 @@ Timezone-related classes and functions.
 This module uses pytz when it's available and fallbacks when it isn't.
 """
 
-from datetime import datetime, timedelta, tzinfo
-from threading import local
 import sys
 import time as _time
+from datetime import datetime, timedelta, tzinfo
+from threading import local
+
+from django.conf import settings
+from django.utils import lru_cache, six
+from django.utils.decorators import ContextDecorator
 
 try:
     import pytz
 except ImportError:
     pytz = None
 
-from django.conf import settings
-from django.utils import six
-from django.utils.decorators import ContextDecorator
 
 __all__ = [
     'utc', 'get_fixed_timezone',
@@ -162,25 +163,21 @@ def get_fixed_timezone(offset):
     name = sign + hhmm
     return FixedOffset(offset, name)
 
-# In order to avoid accessing the settings at compile time,
-# wrap the expression in a function and cache the result.
-_localtime = None
 
-
+# In order to avoid accessing settings at compile time,
+# wrap the logic in a function and cache the result.
+@lru_cache.lru_cache()
 def get_default_timezone():
     """
     Returns the default time zone as a tzinfo instance.
 
     This is the time zone defined by settings.TIME_ZONE.
     """
-    global _localtime
-    if _localtime is None:
-        if isinstance(settings.TIME_ZONE, six.string_types) and pytz is not None:
-            _localtime = pytz.timezone(settings.TIME_ZONE)
-        else:
-            # This relies on os.environ['TZ'] being set to settings.TIME_ZONE.
-            _localtime = LocalTimezone()
-    return _localtime
+    if isinstance(settings.TIME_ZONE, six.string_types) and pytz is not None:
+        return pytz.timezone(settings.TIME_ZONE)
+    else:
+        # This relies on os.environ['TZ'] being set to settings.TIME_ZONE.
+        return LocalTimezone()
 
 
 # This function exists for consistency with get_current_timezone_name

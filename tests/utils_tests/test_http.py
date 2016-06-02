@@ -1,12 +1,12 @@
+# -*- encoding: utf-8 -*-
 from __future__ import unicode_literals
 
-from datetime import datetime
 import sys
 import unittest
+from datetime import datetime
 
+from django.utils import http, six
 from django.utils.datastructures import MultiValueDict
-from django.utils import http
-from django.utils import six
 
 
 class TestUtilsHttp(unittest.TestCase):
@@ -19,6 +19,9 @@ class TestUtilsHttp(unittest.TestCase):
         self.assertTrue(http.same_origin('http://foo.com/', 'http://foo.com'))
         # With port
         self.assertTrue(http.same_origin('https://foo.com:8000', 'https://foo.com:8000/'))
+        # No port given but according to RFC6454 still the same origin
+        self.assertTrue(http.same_origin('http://foo.com', 'http://foo.com:80/'))
+        self.assertTrue(http.same_origin('https://foo.com', 'https://foo.com:443/'))
 
     def test_same_origin_false(self):
         # Different scheme
@@ -29,6 +32,9 @@ class TestUtilsHttp(unittest.TestCase):
         self.assertFalse(http.same_origin('http://foo.com', 'http://foo.com.evil.com'))
         # Different port
         self.assertFalse(http.same_origin('http://foo.com:8000', 'http://foo.com:8001'))
+        # No port given
+        self.assertFalse(http.same_origin('http://foo.com', 'http://foo.com:8000/'))
+        self.assertFalse(http.same_origin('https://foo.com', 'https://foo.com:8000/'))
 
     def test_urlencode(self):
         # 2-tuples (the norm)
@@ -95,7 +101,7 @@ class TestUtilsHttp(unittest.TestCase):
         for bad_url in ('http://example.com',
                         'http:///example.com',
                         'https://example.com',
-                        'ftp://exampel.com',
+                        'ftp://example.com',
                         r'\\example.com',
                         r'\\\example.com',
                         r'/\\/example.com',
@@ -109,17 +115,43 @@ class TestUtilsHttp(unittest.TestCase):
                         'http:/\//example.com',
                         'http:\/example.com',
                         'http:/\example.com',
-                        'javascript:alert("XSS")'):
+                        'javascript:alert("XSS")',
+                        '\njavascript:alert(x)',
+                        '\x08//example.com',
+                        r'http://otherserver\@example.com',
+                        r'http:\\testserver\@example.com',
+                        r'http://testserver\me:pass@example.com',
+                        r'http://testserver\@example.com',
+                        r'http:\\testserver\confirm\me@example.com',
+                        '\n'):
             self.assertFalse(http.is_safe_url(bad_url, host='testserver'), "%s should be blocked" % bad_url)
         for good_url in ('/view/?param=http://example.com',
                      '/view/?param=https://example.com',
-                     '/view?param=ftp://exampel.com',
+                     '/view?param=ftp://example.com',
                      'view/?param=//example.com',
                      'https://testserver/',
                      'HTTPS://testserver/',
                      '//testserver/',
+                     'http://testserver/confirm?email=me@example.com',
                      '/url%20with%20spaces/'):
             self.assertTrue(http.is_safe_url(good_url, host='testserver'), "%s should be allowed" % good_url)
+
+        if six.PY2:
+            # Check binary URLs, regression tests for #26308
+            self.assertTrue(
+                http.is_safe_url(b'https://testserver/', host='testserver'),
+                "binary URLs should be allowed on Python 2"
+            )
+            self.assertFalse(http.is_safe_url(b'\x08//example.com', host='testserver'))
+            self.assertTrue(http.is_safe_url('àview/'.encode('utf-8'), host='testserver'))
+            self.assertFalse(http.is_safe_url('àview'.encode('latin-1'), host='testserver'))
+
+        # Valid basic auth credentials are allowed.
+        self.assertTrue(http.is_safe_url(r'http://user:pass@testserver/', host='user:pass@testserver'))
+        # A path without host is allowed.
+        self.assertTrue(http.is_safe_url('/confirm/me@example.com'))
+        # Basic auth without host is not allowed.
+        self.assertFalse(http.is_safe_url(r'http://testserver\@example.com'))
 
     def test_urlsafe_base64_roundtrip(self):
         bytestring = b'foo'

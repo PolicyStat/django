@@ -10,14 +10,16 @@ from itertools import dropwhile
 
 import django
 from django.conf import settings
-from django.core.management.base import CommandError, BaseCommand
-from django.core.management.utils import (handle_extensions, find_command,
-    popen_wrapper)
-from django.utils.encoding import force_str
-from django.utils.functional import cached_property, total_ordering
+from django.core.management.base import BaseCommand, CommandError
+from django.core.management.utils import (
+    find_command, handle_extensions, popen_wrapper,
+)
 from django.utils import six
-from django.utils.text import get_text_list
+from django.utils._os import upath
+from django.utils.encoding import DEFAULT_LOCALE_ENCODING, force_str
+from django.utils.functional import cached_property, total_ordering
 from django.utils.jslex import prepare_js_for_gettext
+from django.utils.text import get_text_list
 
 plural_forms_re = re.compile(r'^(?P<value>"Plural-Forms.+?\\n")\s*$', re.MULTILINE | re.DOTALL)
 STATUS_OK = 0
@@ -28,6 +30,26 @@ def check_programs(*programs):
         if find_command(program) is None:
             raise CommandError("Can't find %s. Make sure you have GNU "
                     "gettext tools 0.15 or newer installed." % program)
+
+
+def gettext_popen_wrapper(args, os_err_exc_type=CommandError, stdout_encoding="utf-8"):
+    """
+    Makes sure text obtained from stdout of gettext utilities is Unicode.
+    """
+    # This both decodes utf-8 and cleans line endings. Simply using
+    # popen_wrapper(universal_newlines=True) doesn't properly handle the
+    # encoding. This goes back to popen's flaky support for encoding:
+    # https://bugs.python.org/issue6135. This is a solution for #23271, #21928.
+    # No need to do anything on Python 2 because it's already a byte-string there.
+    manual_io_wrapper = six.PY3 and stdout_encoding != DEFAULT_LOCALE_ENCODING
+
+    stdout, stderr, status_code = popen_wrapper(args, os_err_exc_type=os_err_exc_type,
+                                                universal_newlines=not manual_io_wrapper)
+    if manual_io_wrapper:
+        stdout = io.TextIOWrapper(io.BytesIO(stdout), encoding=stdout_encoding).read()
+    if six.PY2:
+        stdout = stdout.decode(stdout_encoding)
+    return stdout, stderr, status_code
 
 
 @total_ordering
@@ -115,7 +137,7 @@ class TranslatableFile(object):
             args.append(work_file)
         else:
             return
-        msgs, errors, status = popen_wrapper(args)
+        msgs, errors, status = gettext_popen_wrapper(args)
         if errors:
             if status != STATUS_OK:
                 if is_templatized:
@@ -127,8 +149,6 @@ class TranslatableFile(object):
                 # Print warnings
                 command.stdout.write(errors)
         if msgs:
-            if six.PY2:
-                msgs = msgs.decode('utf-8')
             # Write/append messages to pot file
             potfile = os.path.join(self.locale_dir, '%s.pot' % str(domain))
             if is_templatized:
@@ -187,7 +207,7 @@ class Command(BaseCommand):
         parser.add_argument('--all', '-a', action='store_true', dest='all',
             default=False, help='Updates the message files for all existing locales.')
         parser.add_argument('--extension', '-e', dest='extensions',
-            help='The file extension(s) to examine (default: "html,txt", or "js" '
+            help='The file extension(s) to examine (default: "html,txt,py", or "js" '
                  'if the domain is "djangojs"). Separate multiple extensions with '
                  'commas, or use -e multiple times.',
             action='append')
@@ -309,10 +329,15 @@ class Command(BaseCommand):
 
     @cached_property
     def gettext_version(self):
-        out, err, status = popen_wrapper(['xgettext', '--version'])
-        m = re.search(r'(\d)\.(\d+)\.(\d+)', out)
+        # Gettext tools will output system-encoded bytestrings instead of UTF-8,
+        # when looking up the version. It's especially a problem on Windows.
+        out, err, status = gettext_popen_wrapper(
+            ['xgettext', '--version'],
+            stdout_encoding=DEFAULT_LOCALE_ENCODING,
+        )
+        m = re.search(r'(\d+)\.(\d+)\.?(\d+)?', out)
         if m:
-            return tuple(int(d) for d in m.groups())
+            return tuple(int(d) for d in m.groups() if d is not None)
         else:
             raise CommandError("Unable to get gettext version. Is it installed?")
 
@@ -325,8 +350,14 @@ class Command(BaseCommand):
         for f in file_list:
             try:
                 f.process(self, self.domain)
-            except UnicodeDecodeError:
-                self.stdout.write("UnicodeDecodeError: skipped file %s in %s" % (f.file, f.dirpath))
+            except UnicodeDecodeError as e:
+                self.stdout.write(
+                    "UnicodeDecodeError: skipped file %s in %s (reason: %s)" % (
+                        f.file,
+                        f.dirpath,
+                        e,
+                    )
+                )
 
         potfiles = []
         for path in self.locale_paths:
@@ -334,9 +365,7 @@ class Command(BaseCommand):
             if not os.path.exists(potfile):
                 continue
             args = ['msguniq'] + self.msguniq_options + [potfile]
-            msgs, errors, status = popen_wrapper(args)
-            if six.PY2:
-                msgs = msgs.decode('utf-8')
+            msgs, errors, status = gettext_popen_wrapper(args)
             if errors:
                 if status != STATUS_OK:
                     raise CommandError(
@@ -426,9 +455,7 @@ class Command(BaseCommand):
 
         if os.path.exists(pofile):
             args = ['msgmerge'] + self.msgmerge_options + [pofile, potfile]
-            msgs, errors, status = popen_wrapper(args)
-            if six.PY2:
-                msgs = msgs.decode('utf-8')
+            msgs, errors, status = gettext_popen_wrapper(args)
             if errors:
                 if status != STATUS_OK:
                     raise CommandError(
@@ -447,7 +474,7 @@ class Command(BaseCommand):
 
         if self.no_obsolete:
             args = ['msgattrib'] + self.msgattrib_options + ['-o', pofile, pofile]
-            msgs, errors, status = popen_wrapper(args)
+            msgs, errors, status = gettext_popen_wrapper(args)
             if errors:
                 if status != STATUS_OK:
                     raise CommandError(
@@ -461,7 +488,7 @@ class Command(BaseCommand):
         the msgs string, inserting it at the right place. msgs should be the
         contents of a newly created .po file.
         """
-        django_dir = os.path.normpath(os.path.join(os.path.dirname(django.__file__)))
+        django_dir = os.path.normpath(os.path.join(os.path.dirname(upath(django.__file__))))
         if self.domain == 'djangojs':
             domains = ('djangojs', 'django')
         else:

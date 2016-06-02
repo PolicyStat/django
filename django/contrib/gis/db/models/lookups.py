@@ -1,10 +1,11 @@
 from __future__ import unicode_literals
+
 import re
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db.models.constants import LOOKUP_SEP
-from django.db.models.fields import FieldDoesNotExist
+from django.db.models.expressions import Col, Expression
 from django.db.models.lookups import Lookup
-from django.db.models.expressions import ExpressionNode, Col
 from django.utils import six
 
 gis_lookups = {}
@@ -66,6 +67,9 @@ class GISLookup(Lookup):
 
     def process_rhs(self, compiler, connection):
         rhs, rhs_params = super(GISLookup, self).process_rhs(compiler, connection)
+        if hasattr(self.rhs, '_as_sql'):
+            # If rhs is some QuerySet, don't touch it
+            return rhs, rhs_params
 
         geom = self.rhs
         if isinstance(self.rhs, Col):
@@ -76,7 +80,7 @@ class GISLookup(Lookup):
             if not hasattr(geo_fld, 'srid'):
                 raise ValueError('No geographic field found in expression.')
             self.rhs.srid = geo_fld.srid
-        elif isinstance(self.rhs, ExpressionNode):
+        elif isinstance(self.rhs, Expression):
             raise ValueError('Complex expressions not supported for GeometryField')
         elif isinstance(self.rhs, (list, tuple)):
             geom = self.rhs[0]

@@ -1,32 +1,19 @@
 import sys
 from ctypes.util import find_library
+
 from django.conf import settings
-
 from django.core.exceptions import ImproperlyConfigured
-from django.db.backends.sqlite3.base import (Database,
-    DatabaseWrapper as SQLiteDatabaseWrapper,
-    DatabaseFeatures as SQLiteDatabaseFeatures, SQLiteCursorWrapper)
-from django.contrib.gis.db.backends.base import BaseSpatialFeatures
-from django.contrib.gis.db.backends.spatialite.client import SpatiaLiteClient
-from django.contrib.gis.db.backends.spatialite.creation import SpatiaLiteCreation
-from django.contrib.gis.db.backends.spatialite.introspection import SpatiaLiteIntrospection
-from django.contrib.gis.db.backends.spatialite.operations import SpatiaLiteOperations
-from django.contrib.gis.db.backends.spatialite.schema import SpatialiteSchemaEditor
+from django.db.backends.sqlite3.base import (
+    Database, DatabaseWrapper as SQLiteDatabaseWrapper, SQLiteCursorWrapper,
+)
 from django.utils import six
-from django.utils.functional import cached_property
 
-
-class DatabaseFeatures(BaseSpatialFeatures, SQLiteDatabaseFeatures):
-    supports_distance_geodetic = False
-    # SpatiaLite can only count vertices in LineStrings
-    supports_num_points_poly = False
-
-    @cached_property
-    def supports_initspatialmetadata_in_one_transaction(self):
-        # SpatiaLite 4.1+ support initializing all metadata in one transaction
-        # which can result in a significant performance improvement when
-        # creating the database.
-        return self.connection.ops.spatial_version >= (4, 1, 0)
+from .client import SpatiaLiteClient
+from .creation import SpatiaLiteCreation
+from .features import DatabaseFeatures
+from .introspection import SpatiaLiteIntrospection
+from .operations import SpatiaLiteOperations
+from .schema import SpatialiteSchemaEditor
 
 
 class DatabaseWrapper(SQLiteDatabaseWrapper):
@@ -79,3 +66,12 @@ class DatabaseWrapper(SQLiteDatabaseWrapper):
             six.reraise(ImproperlyConfigured, ImproperlyConfigured(new_msg), sys.exc_info()[2])
         cur.close()
         return conn
+
+    def prepare_database(self):
+        super(DatabaseWrapper, self).prepare_database()
+        # Check if spatial metadata have been initialized in the database
+        with self.cursor() as cursor:
+            cursor.execute("PRAGMA table_info(geometry_columns);")
+            if cursor.fetchall() == []:
+                arg = "1" if self.features.supports_initspatialmetadata_in_one_transaction else ""
+                cursor.execute("SELECT InitSpatialMetaData(%s)" % arg)

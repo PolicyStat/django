@@ -7,7 +7,7 @@ Cross Site Request Forgery protection
 
 The CSRF middleware and template tag provides easy-to-use protection against
 `Cross Site Request Forgeries`_.  This type of attack occurs when a malicious
-Web site contains a link, a form button or some javascript that is intended to
+Web site contains a link, a form button or some JavaScript that is intended to
 perform some action on your Web site, using the credentials of a logged-in user
 who visits the malicious site in their browser.  A related type of attack,
 'login CSRF', where an attacking site tricks a user's browser into logging into
@@ -40,26 +40,26 @@ To take advantage of CSRF protection in your views, follow these steps:
 2. In any template that uses a POST form, use the :ttag:`csrf_token` tag inside
    the ``<form>`` element if the form is for an internal URL, e.g.::
 
-       <form action="." method="post">{% csrf_token %}
+       <form action="" method="post">{% csrf_token %}
 
    This should not be done for POST forms that target external URLs, since
    that would cause the CSRF token to be leaked, leading to a vulnerability.
 
 3. In the corresponding view functions, ensure that the
-   ``'django.core.context_processors.csrf'`` context processor is
+   ``'django.template.context_processors.csrf'`` context processor is
    being used. Usually, this can be done in one of two ways:
 
    1. Use RequestContext, which always uses
-      ``'django.core.context_processors.csrf'`` (no matter what your
-      TEMPLATE_CONTEXT_PROCESSORS setting).  If you are using
-      generic views or contrib apps, you are covered already, since these
-      apps use RequestContext throughout.
+      ``'django.template.context_processors.csrf'`` (no matter what template
+      context processors are configured in the :setting:`TEMPLATES` setting).
+      If you are using generic views or contrib apps, you are covered already,
+      since these apps use RequestContext throughout.
 
    2. Manually import and use the processor to generate the CSRF token and
       add it to the template context. e.g.::
 
-          from django.core.context_processors import csrf
           from django.shortcuts import render_to_response
+          from django.template.context_processors import csrf
 
           def my_view(request):
               c = {}
@@ -80,7 +80,7 @@ While the above method can be used for AJAX POST requests, it has some
 inconveniences: you have to remember to pass the CSRF token in as POST data with
 every POST request. For this reason, there is an alternative method: on each
 XMLHttpRequest, set a custom ``X-CSRFToken`` header to the value of the CSRF
-token. This is often easier, because many javascript frameworks provide hooks
+token. This is often easier, because many JavaScript frameworks provide hooks
 that allow headers to be set on every request.
 
 As a first step, you must get the CSRF token itself. The recommended source for
@@ -114,12 +114,12 @@ Acquiring the token is straightforward:
     }
     var csrftoken = getCookie('csrftoken');
 
-The above code could be simplified by using the `jQuery cookie plugin
-<http://plugins.jquery.com/cookie/>`_ to replace ``getCookie``:
+The above code could be simplified by using the `JavaScript Cookie library
+<https://github.com/js-cookie/js-cookie/>`_ to replace ``getCookie``:
 
 .. code-block:: javascript
 
-    var csrftoken = $.cookie('csrftoken');
+    var csrftoken = Cookies.get('csrftoken');
 
 .. note::
 

@@ -2,14 +2,15 @@ from __future__ import unicode_literals
 
 from math import ceil
 
-from django.db import models, IntegrityError, connection
+from django.db import IntegrityError, connection, models
 from django.db.models.sql.constants import GET_ITERATOR_CHUNK_SIZE
-from django.test import TestCase, skipUnlessDBFeature, skipIfDBFeature
-from django.utils.six.moves import xrange
+from django.test import TestCase, skipIfDBFeature, skipUnlessDBFeature
+from django.utils.six.moves import range
 
-from .models import (R, RChild, S, T, A, M, MR, MRNull,
-    create_a, get_default_r, User, Avatar, HiddenUser, HiddenUserProfile,
-    M2MTo, M2MFrom, Parent, Child, Base)
+from .models import (
+    MR, A, Avatar, Base, Child, HiddenUser, HiddenUserProfile, M, M2MFrom,
+    M2MTo, MRNull, Parent, R, RChild, S, T, User, create_a, get_default_r,
+)
 
 
 class OnDeleteTests(TestCase):
@@ -36,7 +37,7 @@ class OnDeleteTests(TestCase):
         a = create_a('setnull')
         a.setnull.delete()
         a = A.objects.get(pk=a.pk)
-        self.assertEqual(None, a.setnull)
+        self.assertIsNone(a.setnull)
 
     def test_setdefault(self):
         a = create_a('setdefault')
@@ -48,7 +49,7 @@ class OnDeleteTests(TestCase):
         a = create_a('setdefault_none')
         a.setdefault_none.delete()
         a = A.objects.get(pk=a.pk)
-        self.assertEqual(None, a.setdefault_none)
+        self.assertIsNone(a.setdefault_none)
 
     def test_cascade(self):
         a = create_a('cascade')
@@ -118,7 +119,7 @@ class OnDeleteTests(TestCase):
         self.assertFalse(R.objects.filter(pk=a.child_setnull_id).exists())
 
         a = A.objects.get(pk=a.pk)
-        self.assertEqual(None, a.child_setnull)
+        self.assertIsNone(a.child_setnull)
 
     def test_setnull_from_parent(self):
         a = create_a('child_setnull')
@@ -126,13 +127,13 @@ class OnDeleteTests(TestCase):
         self.assertFalse(RChild.objects.filter(pk=a.child_setnull_id).exists())
 
         a = A.objects.get(pk=a.pk)
-        self.assertEqual(None, a.child_setnull)
+        self.assertIsNone(a.child_setnull)
 
     def test_o2o_setnull(self):
         a = create_a('o2o_setnull')
         a.o2o_setnull.delete()
         a = A.objects.get(pk=a.pk)
-        self.assertEqual(None, a.o2o_setnull)
+        self.assertIsNone(a.o2o_setnull)
 
 
 class DeletionTests(TestCase):
@@ -169,7 +170,7 @@ class DeletionTests(TestCase):
 
     def test_bulk(self):
         s = S.objects.create(r=R.objects.create())
-        for i in xrange(2 * GET_ITERATOR_CHUNK_SIZE):
+        for i in range(2 * GET_ITERATOR_CHUNK_SIZE):
             T.objects.create(s=s)
         #   1 (select related `T` instances)
         # + 1 (select related `U` instances)
@@ -196,11 +197,11 @@ class DeletionTests(TestCase):
         a.cascade.delete()
 
         for obj in deleted:
-            self.assertEqual(None, obj.pk)
+            self.assertIsNone(obj.pk)
 
         for pk_list in related_setnull_sets:
             for a in A.objects.filter(id__in=pk_list):
-                self.assertEqual(None, a.setnull)
+                self.assertIsNone(a.setnull)
 
         models.signals.pre_delete.disconnect(pre_delete)
 
@@ -324,7 +325,7 @@ class DeletionTests(TestCase):
         # One query for Avatar.objects.all() and then one related fast delete for
         # each batch.
         fetches_to_mem = 1 + batches
-        # The Avatar objecs are going to be deleted in batches of GET_ITERATOR_CHUNK_SIZE
+        # The Avatar objects are going to be deleted in batches of GET_ITERATOR_CHUNK_SIZE
         queries = fetches_to_mem + TEST_SIZE // GET_ITERATOR_CHUNK_SIZE
         self.assertNumQueries(queries, Avatar.objects.all().delete)
         self.assertFalse(Avatar.objects.exists())
@@ -332,10 +333,10 @@ class DeletionTests(TestCase):
     def test_large_delete_related(self):
         TEST_SIZE = 2000
         s = S.objects.create(r=R.objects.create())
-        for i in xrange(TEST_SIZE):
+        for i in range(TEST_SIZE):
             T.objects.create(s=s)
 
-        batch_size = max(connection.ops.bulk_batch_size(['pk'], xrange(TEST_SIZE)), 1)
+        batch_size = max(connection.ops.bulk_batch_size(['pk'], range(TEST_SIZE)), 1)
 
         # TEST_SIZE // batch_size (select related `T` instances)
         # + 1 (select related `U` instances)
@@ -347,6 +348,17 @@ class DeletionTests(TestCase):
         self.assertNumQueries(expected_num_queries, s.delete)
         self.assertFalse(S.objects.exists())
         self.assertFalse(T.objects.exists())
+
+    def test_proxied_model_duplicate_queries(self):
+        """
+        #25685 - Deleting instances of a model with existing proxy
+        classes should not issue multiple queries during cascade
+        deletion of referring models.
+        """
+        avatar = Avatar.objects.create()
+        # One query for the Avatar table and a second for the User one.
+        with self.assertNumQueries(2):
+            avatar.delete()
 
 
 class FastDeleteTests(TestCase):

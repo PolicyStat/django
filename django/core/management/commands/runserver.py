@@ -1,20 +1,19 @@
 from __future__ import unicode_literals
 
-from datetime import datetime
 import errno
 import os
 import re
-import sys
 import socket
+import sys
+from datetime import datetime
 
-from django.core.management.base import BaseCommand, CommandError
-from django.core.servers.basehttp import run, get_internal_wsgi_application
-from django.db import connections, DEFAULT_DB_ALIAS
-from django.db.migrations.executor import MigrationExecutor
-from django.utils import autoreload
-from django.utils.encoding import get_system_encoding
-from django.utils import six
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management.base import BaseCommand, CommandError
+from django.core.servers.basehttp import get_internal_wsgi_application, run
+from django.db import DEFAULT_DB_ALIAS, connections
+from django.db.migrations.executor import MigrationExecutor
+from django.utils import autoreload, six
+from django.utils.encoding import force_text, get_system_encoding
 
 naiveip_re = re.compile(r"""^(?:
 (?P<addr>
@@ -103,6 +102,10 @@ class Command(BaseCommand):
         from django.conf import settings
         from django.utils import translation
 
+        # If an exception was silenced in ManagementUtility.execute in order
+        # to be raised in the child process, raise it now.
+        autoreload.raise_last_exception()
+
         threading = options.get('use_threading')
         shutdown_message = options.get('shutdown_message', '')
         quit_command = 'CTRL-BREAK' if sys.platform == 'win32' else 'CONTROL-C'
@@ -148,7 +151,7 @@ class Command(BaseCommand):
             try:
                 error_text = ERRORS[e.errno]
             except KeyError:
-                error_text = str(e)
+                error_text = force_text(e)
             self.stderr.write("Error: %s" % error_text)
             # Need to use an OS exit because sys.exit doesn't work in a thread
             os._exit(1)

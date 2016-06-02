@@ -1,5 +1,5 @@
-from contextlib import contextmanager
 import os
+from contextlib import contextmanager
 from unittest import TestSuite, TextTestRunner, defaultTestLoader
 
 from django.test import TestCase
@@ -121,16 +121,45 @@ class DiscoverRunnerTest(TestCase):
         """
         Tests shouldn't be discovered twice when discovering on overlapping paths.
         """
-        single = DiscoverRunner().build_suite(["django.contrib.gis"]).countTestCases()
+        single = DiscoverRunner().build_suite(["gis_tests"]).countTestCases()
         dups = DiscoverRunner().build_suite(
-            ["django.contrib.gis", "django.contrib.gis.tests.geo3d"]).countTestCases()
+            ["gis_tests", "gis_tests.geo3d"]).countTestCases()
         self.assertEqual(single, dups)
 
-    def test_overrideable_test_suite(self):
+    def test_reverse(self):
+        """
+        Reverse should reorder tests while maintaining the grouping specified
+        by ``DiscoverRunner.reorder_by``.
+        """
+        runner = DiscoverRunner(reverse=True)
+        suite = runner.build_suite(
+            test_labels=('test_discovery_sample', 'test_discovery_sample2'))
+        self.assertIn('test_discovery_sample2', next(iter(suite)).id(),
+                      msg="Test labels should be reversed.")
+        suite = runner.build_suite(test_labels=('test_discovery_sample2',))
+        suite = tuple(suite)
+        self.assertIn('DjangoCase', suite[0].id(),
+                      msg="Test groups should not be reversed.")
+        self.assertIn('SimpleCase', suite[4].id(),
+                      msg="Test groups order should be preserved.")
+        self.assertIn('DjangoCase2', suite[0].id(),
+                      msg="Django test cases should be reversed.")
+        self.assertIn('SimpleCase2', suite[4].id(),
+                      msg="Simple test cases should be reversed.")
+        self.assertIn('UnittestCase2', suite[8].id(),
+                      msg="Unittest test cases should be reversed.")
+        self.assertIn('test_2', suite[0].id(),
+                      msg="Methods of Django cases should be reversed.")
+        self.assertIn('test_2', suite[4].id(),
+                      msg="Methods of simple cases should be reversed.")
+        self.assertIn('test_2', suite[8].id(),
+                      msg="Methods of unittest cases should be reversed.")
+
+    def test_overridable_test_suite(self):
         self.assertEqual(DiscoverRunner().test_suite, TestSuite)
 
-    def test_overrideable_test_runner(self):
+    def test_overridable_test_runner(self):
         self.assertEqual(DiscoverRunner().test_runner, TextTestRunner)
 
-    def test_overrideable_test_loader(self):
+    def test_overridable_test_loader(self):
         self.assertEqual(DiscoverRunner().test_loader, defaultTestLoader)

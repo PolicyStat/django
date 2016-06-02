@@ -1,18 +1,22 @@
 from __future__ import unicode_literals
 
 import datetime
+import sys
+import unittest
 
-from django.contrib.admin import (site, ModelAdmin, SimpleListFilter,
-    BooleanFieldListFilter, AllValuesFieldListFilter, RelatedOnlyFieldListFilter)
+from django.contrib.admin import (
+    AllValuesFieldListFilter, BooleanFieldListFilter, ModelAdmin,
+    RelatedOnlyFieldListFilter, SimpleListFilter, site,
+)
 from django.contrib.admin.views.main import ChangeList
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.models import User
 from django.core.exceptions import ImproperlyConfigured
-from django.test import TestCase, RequestFactory, override_settings
-from django.utils.encoding import force_text
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import six
+from django.utils.encoding import force_text
 
-from .models import Book, Department, Employee, Bookmark, TaggedItem
+from .models import Book, Bookmark, Department, Employee, TaggedItem
 
 
 def select_by(dictlist, key, value):
@@ -349,6 +353,11 @@ class ListFiltersTests(TestCase):
             )
         )
 
+    @unittest.skipIf(
+        sys.platform.startswith('win'),
+        "Windows doesn't support setting a timezone that differs from the "
+        "system timezone."
+    )
     @override_settings(USE_TZ=True)
     def test_datefieldlistfilter_with_time_zone_support(self):
         # Regression for #17830
@@ -857,7 +866,7 @@ class ListFiltersTests(TestCase):
         """
 
         modeladmin = DepartmentFilterEmployeeAdmin(Employee, site)
-        request = self.request_factory.get('/', {'department': self.john.pk})
+        request = self.request_factory.get('/', {'department': self.john.department.pk})
         changelist = self.get_changelist(request, Employee, modeladmin)
 
         queryset = changelist.get_queryset(request)
@@ -869,7 +878,7 @@ class ListFiltersTests(TestCase):
         choices = list(filterspec.choices(changelist))
         self.assertEqual(choices[1]['display'], 'DEV')
         self.assertEqual(choices[1]['selected'], True)
-        self.assertEqual(choices[1]['query_string'], '?department=%s' % self.john.pk)
+        self.assertEqual(choices[1]['query_string'], '?department=%s' % self.john.department.pk)
 
     def test_lookup_with_non_string_value_underscored(self):
         """
@@ -878,7 +887,7 @@ class ListFiltersTests(TestCase):
         Refs #19182
         """
         modeladmin = DepartmentFilterUnderscoredEmployeeAdmin(Employee, site)
-        request = self.request_factory.get('/', {'department__whatever': self.john.pk})
+        request = self.request_factory.get('/', {'department__whatever': self.john.department.pk})
         changelist = self.get_changelist(request, Employee, modeladmin)
 
         queryset = changelist.get_queryset(request)
@@ -890,7 +899,7 @@ class ListFiltersTests(TestCase):
         choices = list(filterspec.choices(changelist))
         self.assertEqual(choices[1]['display'], 'DEV')
         self.assertEqual(choices[1]['selected'], True)
-        self.assertEqual(choices[1]['query_string'], '?department__whatever=%s' % self.john.pk)
+        self.assertEqual(choices[1]['query_string'], '?department__whatever=%s' % self.john.department.pk)
 
     def test_fk_with_to_field(self):
         """

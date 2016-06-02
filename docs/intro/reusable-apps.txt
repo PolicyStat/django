@@ -34,7 +34,7 @@ projects and ready to publish for others to install and use.
 
 .. admonition:: Package? App?
 
-    A Python `package <http://docs.python.org/tutorial/modules.html#packages>`_
+    A Python `package <https://docs.python.org/tutorial/modules.html#packages>`_
     provides a way of grouping related Python code for easy reuse. A package
     contains one or more files of Python code (also known as "modules").
 
@@ -193,7 +193,7 @@ this. For a small app like polls, this process isn't too difficult.
        :filename: django-polls/setup.py
 
        import os
-       from setuptools import setup
+       from setuptools import find_packages, setup
 
        with open(os.path.join(os.path.dirname(__file__), 'README.rst')) as readme:
            README = readme.read()
@@ -204,7 +204,7 @@ this. For a small app like polls, this process isn't too difficult.
        setup(
            name='django-polls',
            version='0.1',
-           packages=['polls'],
+           packages=find_packages(),
            include_package_data=True,
            license='BSD License',  # example license
            description='A simple Django app to conduct Web-based polls.',
@@ -215,6 +215,7 @@ this. For a small app like polls, this process isn't too difficult.
            classifiers=[
                'Environment :: Web Environment',
                'Framework :: Django',
+               'Framework :: Django :: X.Y',  # replace "X.Y" as appropriate
                'Intended Audience :: Developers',
                'License :: OSI Approved :: BSD License', # example license
                'Operating System :: OS Independent',

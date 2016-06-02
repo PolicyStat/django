@@ -1,32 +1,32 @@
 from __future__ import unicode_literals
 
 import datetime
-from decimal import Decimal
 import unittest
-import warnings
+from decimal import Decimal
 
-from django import test
-from django import forms
-from django.core import validators
+from django import forms, test
+from django.core import checks, validators
 from django.core.exceptions import ValidationError
-from django.db import connection, transaction, models, IntegrityError
+from django.db import IntegrityError, connection, models, transaction
 from django.db.models.fields import (
-    AutoField, BigIntegerField, BinaryField, BooleanField, CharField,
-    CommaSeparatedIntegerField, DateField, DateTimeField, DecimalField,
-    EmailField, FilePathField, FloatField, IntegerField, IPAddressField,
-    GenericIPAddressField, NOT_PROVIDED, NullBooleanField, PositiveIntegerField,
+    NOT_PROVIDED, AutoField, BigIntegerField, BinaryField, BooleanField,
+    CharField, CommaSeparatedIntegerField, DateField, DateTimeField,
+    DecimalField, EmailField, FilePathField, FloatField, GenericIPAddressField,
+    IntegerField, IPAddressField, NullBooleanField, PositiveIntegerField,
     PositiveSmallIntegerField, SlugField, SmallIntegerField, TextField,
-    TimeField, URLField)
+    TimeField, URLField,
+)
 from django.db.models.fields.files import FileField, ImageField
 from django.utils import six
 from django.utils.functional import lazy
 
 from .models import (
-    Foo, Bar, Whiz, BigD, BigS, BigIntegerModel, Post, NullBooleanModel,
-    BooleanModel, PrimaryKeyCharModel, DataModel, Document, RenamedField,
-    DateTimeModel, VerboseNameField, FksToBooleans, FkToChar, FloatModel,
-    SmallIntegerModel, IntegerModel, PositiveSmallIntegerModel, PositiveIntegerModel,
-    WhizIter, WhizIterEmpty)
+    Bar, BigD, BigIntegerModel, BigS, BooleanModel, DataModel, DateTimeModel,
+    Document, FksToBooleans, FkToChar, FloatModel, Foo, GenericIPAddress,
+    IntegerModel, NullBooleanModel, PositiveIntegerModel,
+    PositiveSmallIntegerModel, Post, PrimaryKeyCharModel, RenamedField,
+    SmallIntegerModel, VerboseNameField, Whiz, WhizIter, WhizIterEmpty,
+)
 
 
 class BasicFieldTests(test.TestCase):
@@ -75,7 +75,7 @@ class BasicFieldTests(test.TestCase):
 
     def test_field_verbose_name(self):
         m = VerboseNameField
-        for i in range(1, 23):
+        for i in range(1, 25):
             self.assertEqual(m._meta.get_field('field%d' % i).verbose_name,
                              'verbose field%d' % i)
 
@@ -181,8 +181,28 @@ class ForeignKeyTests(test.TestCase):
         fk_model_empty = FkToChar.objects.select_related('out').get(id=fk_model_empty.pk)
         self.assertEqual(fk_model_empty.out, char_model_empty)
 
+    def test_warning_when_unique_true_on_fk(self):
+        class FKUniqueTrue(models.Model):
+            fk_field = models.ForeignKey(Foo, unique=True)
 
-class DateTimeFieldTests(unittest.TestCase):
+        model = FKUniqueTrue()
+        expected_warnings = [
+            checks.Warning(
+                'Setting unique=True on a ForeignKey has the same effect as using a OneToOneField.',
+                hint='ForeignKey(unique=True) is usually better served by a OneToOneField.',
+                obj=FKUniqueTrue.fk_field.field,
+                id='fields.W342',
+            )
+        ]
+        warnings = model.check()
+        self.assertEqual(warnings, expected_warnings)
+
+    def test_related_name_converted_to_text(self):
+        rel_name = Bar._meta.get_field('a').rel.related_name
+        self.assertIsInstance(rel_name, six.text_type)
+
+
+class DateTimeFieldTests(test.TestCase):
     def test_datetimefield_to_python_usecs(self):
         """DateTimeField.to_python should support usecs"""
         f = models.DateTimeField()
@@ -212,7 +232,7 @@ class DateTimeFieldTests(unittest.TestCase):
         self.assertEqual(obj.t, tim)
 
 
-class BooleanFieldTests(unittest.TestCase):
+class BooleanFieldTests(test.TestCase):
     def _test_get_db_prep_lookup(self, f):
         self.assertEqual(f.get_db_prep_lookup('exact', True, connection=connection), [True])
         self.assertEqual(f.get_db_prep_lookup('exact', '1', connection=connection), [True])
@@ -313,7 +333,7 @@ class BooleanFieldTests(unittest.TestCase):
 
         # Test select_related('fk_field_name')
         ma = FksToBooleans.objects.select_related('bf').get(pk=m1.id)
-        # verify types -- should't be 0/1
+        # verify types -- shouldn't be 0/1
         self.assertIsInstance(ma.bf.bfield, bool)
         self.assertIsInstance(ma.nbf.nbfield, bool)
         # verify values
@@ -351,8 +371,9 @@ class BooleanFieldTests(unittest.TestCase):
             self.assertFalse(boolean_field.has_default())
             b = BooleanModel()
             self.assertIsNone(b.bfield)
-            with self.assertRaises(IntegrityError):
-                b.save()
+            with transaction.atomic():
+                with self.assertRaises(IntegrityError):
+                    b.save()
         finally:
             boolean_field.default = old_default
 
@@ -457,7 +478,7 @@ class ValidationTest(test.TestCase):
 
     def test_nullable_integerfield_cleans_none_on_null_and_blank_true(self):
         f = models.IntegerField(null=True, blank=True)
-        self.assertEqual(None, f.clean(None, None))
+        self.assertIsNone(f.clean(None, None))
 
     def test_integerfield_raises_error_on_empty_input(self):
         f = models.IntegerField(null=False)
@@ -485,6 +506,12 @@ class IntegerFieldTests(test.TestCase):
     model = IntegerModel
     documented_range = (-2147483648, 2147483647)
 
+    @property
+    def backend_range(self):
+        field = self.model._meta.get_field('value')
+        internal_type = field.get_internal_type()
+        return connection.ops.integer_field_range(internal_type)
+
     def test_documented_range(self):
         """
         Ensure that values within the documented safe range pass validation,
@@ -506,14 +533,34 @@ class IntegerFieldTests(test.TestCase):
         self.assertEqual(qs.count(), 1)
         self.assertEqual(qs[0].value, max_value)
 
+    def test_backend_range_save(self):
+        """
+        Ensure that backend specific range can be saved without corruption.
+        """
+        min_value, max_value = self.backend_range
+
+        if min_value is not None:
+            instance = self.model(value=min_value)
+            instance.full_clean()
+            instance.save()
+            qs = self.model.objects.filter(value__lte=min_value)
+            self.assertEqual(qs.count(), 1)
+            self.assertEqual(qs[0].value, min_value)
+
+        if max_value is not None:
+            instance = self.model(value=max_value)
+            instance.full_clean()
+            instance.save()
+            qs = self.model.objects.filter(value__gte=max_value)
+            self.assertEqual(qs.count(), 1)
+            self.assertEqual(qs[0].value, max_value)
+
     def test_backend_range_validation(self):
         """
         Ensure that backend specific range are enforced at the model
         validation level. ref #12030.
         """
-        field = self.model._meta.get_field('value')
-        internal_type = field.get_internal_type()
-        min_value, max_value = connection.ops.integer_field_range(internal_type)
+        min_value, max_value = self.backend_range
 
         if min_value is not None:
             instance = self.model(value=min_value - 1)
@@ -635,7 +682,6 @@ class FileFieldTests(unittest.TestCase):
 class BinaryFieldTests(test.TestCase):
     binary_data = b'\x00\x46\xFE'
 
-    @test.skipUnlessDBFeature('supports_binary_field')
     def test_set_and_retrieve(self):
         data_set = (self.binary_data, six.memoryview(self.binary_data))
         for bdata in data_set:
@@ -668,6 +714,19 @@ class GenericIPAddressFieldTests(test.TestCase):
         form_field = model_field.formfield()
         self.assertRaises(ValidationError, form_field.clean, '127.0.0.1')
 
+    def test_null_value(self):
+        """
+        Null values should be resolved to None in Python (#24078).
+        """
+        GenericIPAddress.objects.create()
+        o = GenericIPAddress.objects.get()
+        self.assertIsNone(o.ip)
+
+    def test_save_load(self):
+        instance = GenericIPAddress.objects.create(ip='::1')
+        loaded = GenericIPAddress.objects.get()
+        self.assertEqual(loaded.ip, instance.ip)
+
 
 class PromiseTest(test.TestCase):
     def test_AutoField(self):
@@ -678,10 +737,11 @@ class PromiseTest(test.TestCase):
 
     @unittest.skipIf(six.PY3, "Python 3 has no `long` type.")
     def test_BigIntegerField(self):
-        lazy_func = lazy(lambda: long(9999999999999999999), long)
+        # NOQA: long undefined on PY3
+        lazy_func = lazy(lambda: long(9999999999999999999), long)  # NOQA
         self.assertIsInstance(
             BigIntegerField().get_prep_value(lazy_func()),
-            long)
+            long)  # NOQA
 
     def test_BinaryField(self):
         lazy_func = lazy(lambda: b'', bytes)
@@ -778,16 +838,30 @@ class PromiseTest(test.TestCase):
             int)
 
     def test_IPAddressField(self):
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            lazy_func = lazy(lambda: '127.0.0.1', six.text_type)
-            self.assertIsInstance(
-                IPAddressField().get_prep_value(lazy_func()),
-                six.text_type)
-            lazy_func = lazy(lambda: 0, int)
-            self.assertIsInstance(
-                IPAddressField().get_prep_value(lazy_func()),
-                six.text_type)
+        lazy_func = lazy(lambda: '127.0.0.1', six.text_type)
+        self.assertIsInstance(
+            IPAddressField().get_prep_value(lazy_func()),
+            six.text_type)
+        lazy_func = lazy(lambda: 0, int)
+        self.assertIsInstance(
+            IPAddressField().get_prep_value(lazy_func()),
+            six.text_type)
+
+    def test_IPAddressField_deprecated(self):
+        class IPAddressModel(models.Model):
+            ip = IPAddressField()
+
+        model = IPAddressModel()
+        self.assertEqual(
+            model.check(),
+            [checks.Warning(
+                'IPAddressField has been deprecated. Support for it '
+                '(except in historical migrations) will be removed in Django 1.9.',
+                hint='Use GenericIPAddressField instead.',
+                obj=IPAddressModel._meta.get_field('ip'),
+                id='fields.W900',
+            )],
+        )
 
     def test_GenericIPAddressField(self):
         lazy_func = lazy(lambda: '127.0.0.1', six.text_type)

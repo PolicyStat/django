@@ -155,8 +155,17 @@ The functions defined in this module share the following properties:
     Parses a string and returns a :class:`datetime.datetime`.
 
     UTC offsets are supported; if ``value`` describes one, the result's
-    ``tzinfo`` attribute is a :class:`~django.utils.tzinfo.FixedOffset`
+    ``tzinfo`` attribute is a :class:`~django.utils.timezone.FixedOffset`
     instance.
+
+.. function:: parse_duration(value)
+
+    .. versionadded:: 1.8
+
+    Parses a string and returns a :class:`datetime.timedelta`.
+
+    Expects data in the format ``"DD HH:MM:SS.uuuuuu"`` or as specified by ISO
+    8601 (e.g. ``P4DT1H15M20S`` which is equivalent to ``4 1:15:20``).
 
 ``django.utils.decorators``
 ===========================
@@ -167,7 +176,7 @@ The functions defined in this module share the following properties:
 .. function:: method_decorator(decorator)
 
     Converts a function decorator into a method decorator. See :ref:`decorating
-    class based views<decorating-class-based-views>` for example usage.
+    class-based views<decorating-class-based-views>` for example usage.
 
 .. function:: decorator_from_middleware(middleware_class)
 
@@ -347,7 +356,7 @@ SyndicationFeed
 
     Base class for all syndication feeds. Subclasses should provide write().
 
-    .. method:: __init__(title, link, description, [language=None, author_email=None, author_name=None, author_link=None, subtitle=None, categories=None, feed_url=None, feed_copyright=None, feed_guid=None, ttl=None, **kwargs])
+    .. method:: __init__(title, link, description, language=None, author_email=None, author_name=None, author_link=None, subtitle=None, categories=None, feed_url=None, feed_copyright=None, feed_guid=None, ttl=None, **kwargs)
 
         Initialize the feed with the given dictionary of metadata, which applies
         to the entire feed.
@@ -358,7 +367,7 @@ SyndicationFeed
         All parameters should be Unicode objects, except ``categories``, which
         should be a sequence of Unicode objects.
 
-    .. method:: add_item(title, link, description, [author_email=None, author_name=None, author_link=None, pubdate=None, comments=None, unique_id=None, enclosure=None, categories=(), item_copyright=None, ttl=None, updateddate=None, **kwargs])
+    .. method:: add_item(title, link, description, author_email=None, author_name=None, author_link=None, pubdate=None, comments=None, unique_id=None, enclosure=None, categories=(), item_copyright=None, ttl=None, updateddate=None, **kwargs)
 
         Adds an item to the feed. All args are expected to be Python ``unicode``
         objects except ``pubdate`` and ``updateddate``, which are ``datetime.datetime``
@@ -605,7 +614,7 @@ escaping HTML.
 
     You should instead use::
 
-        format_html("{0} <b>{1}</b> {2}",
+        format_html("{} <b>{}</b> {}",
                     mark_safe(some_html), some_text, some_other_text)
 
     This has the advantage that you don't need to apply :func:`escape` to each
@@ -627,7 +636,7 @@ escaping HTML.
     ``args_generator`` should be an iterator that returns the sequence of
     ``args`` that will be passed to :func:`format_html`. For example::
 
-        format_html_join('\n', "<li>{0} {1}</li>", ((u.first_name, u.last_name)
+        format_html_join('\n', "<li>{} {}</li>", ((u.first_name, u.last_name)
                                                     for u in users))
 
 .. function:: strip_tags(value)
@@ -677,8 +686,21 @@ escaping HTML.
     If ``value`` is ``"<B>Joel</B> <button>is</button> a <span>slug</span>"``
     the return value will be ``"<B>Joel</B> <button>is</button> a slug"``.
 
-.. _str.format: http://docs.python.org/library/stdtypes.html#str.format
+.. _str.format: https://docs.python.org/library/stdtypes.html#str.format
 .. _bleach: https://pypi.python.org/pypi/bleach
+
+.. function:: html_safe()
+
+    .. versionadded:: 1.8
+
+    The ``__html__()`` method on a class helps non-Django templates detect
+    classes whose output doesn't require HTML escaping.
+
+    This decorator defines the ``__html__()`` method on the decorated class
+    by wrapping the ``__unicode__()`` (Python 2) or ``__str__()`` (Python 3)
+    in :meth:`~django.utils.safestring.mark_safe`. Ensure the ``__unicode__()``
+    or ``__str__()`` method does indeed return text that doesn't require HTML
+    escaping.
 
 ``django.utils.http``
 =====================
@@ -739,7 +761,7 @@ escaping HTML.
     Converts a positive integer to a base 36 string. On Python 2 ``i`` must be
     smaller than `sys.maxint`_.
 
-    .. _sys.maxint: http://docs.python.org/2/library/sys.html#sys.maxint
+    .. _sys.maxint: https://docs.python.org/2/library/sys.html#sys.maxint
 
 .. function:: urlsafe_base64_encode(s)
 
@@ -822,6 +844,9 @@ appropriate entities.
 
     Can be called multiple times on a single string.
 
+    For building up fragments of HTML, you should normally be using
+    :func:`django.utils.html.format_html` instead.
+
     String marked safe will become unsafe again if modified. For example::
 
         >>> mystr = '<b>Hello World</b>   '
@@ -871,6 +896,13 @@ appropriate entities.
 .. data:: utc
 
     :class:`~datetime.tzinfo` instance that represents UTC.
+
+.. class:: FixedOffset(offset=None, name=None)
+
+    .. versionadded:: 1.7
+
+    A :class:`~datetime.tzinfo` subclass modeling a fixed offset from UTC.
+    ``offset`` is an integer number of minutes east of UTC.
 
 .. function:: get_fixed_timezone(offset)
 
@@ -1089,7 +1121,14 @@ For a complete discussion on the usage of the following see the
 
 .. function:: get_language()
 
-    Returns the currently selected language code.
+    Returns the currently selected language code. Returns ``None`` if
+    translations are temporarily deactivated (by :func:`deactivate_all()` or
+    when ``None`` is passed to :func:`override()`).
+
+    .. versionchanged:: 1.8
+
+        Before Django 1.8, ``get_language()`` always returned
+        :setting:`LANGUAGE_CODE` when translations were deactivated.
 
 .. function:: get_language_bidi()
 

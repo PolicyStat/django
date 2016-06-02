@@ -45,6 +45,7 @@ class Tag(models.Model):
 class Note(models.Model):
     note = models.CharField(max_length=100)
     misc = models.CharField(max_length=10)
+    tag = models.ForeignKey(Tag, blank=True, null=True)
 
     class Meta:
         ordering = ['note']
@@ -55,7 +56,7 @@ class Note(models.Model):
     def __init__(self, *args, **kwargs):
         super(Note, self).__init__(*args, **kwargs)
         # Regression for #13227 -- having an attribute that
-        # is unpickleable doesn't stop you from cloning queries
+        # is unpicklable doesn't stop you from cloning queries
         # that use objects of that type as an argument.
         self.lock = threading.Lock()
 
@@ -698,3 +699,33 @@ class Student(models.Model):
 class Classroom(models.Model):
     school = models.ForeignKey(School)
     students = models.ManyToManyField(Student, related_name='classroom')
+
+
+class Ticket23605A(models.Model):
+    pass
+
+
+class Ticket23605B(models.Model):
+    modela_fk = models.ForeignKey(Ticket23605A)
+    modelc_fk = models.ForeignKey("Ticket23605C")
+    field_b0 = models.IntegerField(null=True)
+    field_b1 = models.BooleanField(default=False)
+
+
+class Ticket23605C(models.Model):
+    field_c0 = models.FloatField()
+
+
+# db_table names have capital letters to ensure they are quoted in queries.
+class Individual(models.Model):
+    alive = models.BooleanField()
+
+    class Meta:
+        db_table = 'Individual'
+
+
+class RelatedIndividual(models.Model):
+    related = models.ForeignKey(Individual, related_name='related_individual')
+
+    class Meta:
+        db_table = 'RelatedIndividual'

@@ -5,32 +5,45 @@ from __future__ import unicode_literals
 import json
 import os
 import re
+import unittest
 import warnings
 
-from django.core import serializers
+import django
+from django.core import management, serializers
 from django.core.exceptions import ImproperlyConfigured
-from django.core.serializers.base import DeserializationError
-from django.core import management
 from django.core.management.base import CommandError
-from django.db import transaction, IntegrityError
+from django.core.serializers.base import DeserializationError
+from django.db import IntegrityError, transaction
 from django.db.models import signals
-from django.test import (TestCase, TransactionTestCase, skipIfDBFeature,
-    skipUnlessDBFeature)
-from django.test import override_settings
-from django.utils._os import upath
+from django.test import (
+    TestCase, TransactionTestCase, override_settings, skipIfDBFeature,
+    skipUnlessDBFeature,
+)
 from django.utils import six
+from django.utils._os import upath
 from django.utils.six import PY3, StringIO
 
-from .models import (Animal, Stuff, Absolute, Parent, Child, Article, Widget,
-    Store, Person, Book, NKChild, RefToNKChild, Circle1, Circle2, Circle3,
-    ExternalDependency, Thingy,
-    M2MSimpleA, M2MSimpleB, M2MSimpleCircularA, M2MSimpleCircularB,
-    M2MComplexA, M2MComplexB, M2MThroughAB, M2MComplexCircular1A,
-    M2MComplexCircular1B, M2MComplexCircular1C, M2MCircular1ThroughAB,
-    M2MCircular1ThroughBC, M2MCircular1ThroughCA, M2MComplexCircular2A,
-    M2MComplexCircular2B, M2MCircular2ThroughAB)
+from .models import (
+    Absolute, Animal, Article, Book, Child, Circle1, Circle2, Circle3,
+    ExternalDependency, M2MCircular1ThroughAB, M2MCircular1ThroughBC,
+    M2MCircular1ThroughCA, M2MCircular2ThroughAB, M2MComplexA, M2MComplexB,
+    M2MComplexCircular1A, M2MComplexCircular1B, M2MComplexCircular1C,
+    M2MComplexCircular2A, M2MComplexCircular2B, M2MSimpleA, M2MSimpleB,
+    M2MSimpleCircularA, M2MSimpleCircularB, M2MThroughAB, NKChild, Parent,
+    Person, RefToNKChild, Store, Stuff, Thingy, Widget,
+)
 
 _cur_dir = os.path.dirname(os.path.abspath(upath(__file__)))
+
+
+def is_ascii(s):
+    return all(ord(c) < 128 for c in s)
+
+
+skipIfNonASCIIPath = unittest.skipIf(
+    not is_ascii(django.__file__) and six.PY2,
+    'Python 2 crashes when checking non-ASCII exception messages.'
+)
 
 
 class TestFixtures(TestCase):
@@ -197,6 +210,7 @@ class TestFixtures(TestCase):
                 verbosity=0,
             )
 
+    @skipIfNonASCIIPath
     @override_settings(SERIALIZATION_MODULES={'unkn': 'unexistent.path'})
     def test_unimportable_serializer(self):
         """
@@ -487,6 +501,16 @@ class TestFixtures(TestCase):
             verbosity=0,
         )
 
+    def test_loaddata_with_m2m_to_self(self):
+        """
+        Regression test for ticket #17946.
+        """
+        management.call_command(
+            'loaddata',
+            'm2mtoself.json',
+            verbosity=0,
+        )
+
     @override_settings(FIXTURE_DIRS=[os.path.join(_cur_dir, 'fixtures_1'),
                                      os.path.join(_cur_dir, 'fixtures_1')])
     def test_fixture_dirs_with_duplicates(self):
@@ -503,6 +527,7 @@ class TestFixtures(TestCase):
             verbosity=0,
         )
 
+    @skipIfNonASCIIPath
     @override_settings(FIXTURE_DIRS=[os.path.join(_cur_dir, 'fixtures')])
     def test_fixture_dirs_with_default_fixture_path(self):
         """

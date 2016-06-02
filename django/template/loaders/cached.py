@@ -4,23 +4,21 @@ to load templates from them in order, caching the result.
 """
 
 import hashlib
-from django.template.base import TemplateDoesNotExist
-from django.template.loader import get_template_from_string, make_origin
+
+from django.template.base import Template, TemplateDoesNotExist
 from django.utils.encoding import force_bytes
 
 from .base import Loader as BaseLoader
-from .utils import _get_template_loaders
 
 
 class Loader(BaseLoader):
     is_usable = True
 
-    def __init__(self, loaders):
+    def __init__(self, engine, loaders):
         self.template_cache = {}
         self.find_template_cache = {}
-        # Use the private, non-caching version of get_template_loaders
-        # in case loaders isn't hashable.
-        self.loaders = _get_template_loaders(loaders)
+        self.loaders = engine.get_template_loaders(loaders)
+        super(Loader, self).__init__(engine)
 
     def cache_key(self, template_name, template_dirs):
         if template_dirs:
@@ -44,7 +42,8 @@ class Loader(BaseLoader):
                 except TemplateDoesNotExist:
                     pass
                 else:
-                    result = (template, make_origin(display_name, loader, name, dirs))
+                    origin = self.engine.make_origin(display_name, loader, name, dirs)
+                    result = template, origin
                     break
         self.find_template_cache[key] = result
         if result:
@@ -63,7 +62,7 @@ class Loader(BaseLoader):
             template, origin = self.find_template(template_name, template_dirs)
             if not hasattr(template, 'render'):
                 try:
-                    template = get_template_from_string(template, origin, template_name)
+                    template = Template(template, origin, template_name, self.engine)
                 except TemplateDoesNotExist:
                     # If compiling the template we found raises TemplateDoesNotExist,
                     # back off to returning the source and display name for the template

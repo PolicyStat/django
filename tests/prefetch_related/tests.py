@@ -1,7 +1,7 @@
 from __future__ import unicode_literals
 
-from django.core.exceptions import ObjectDoesNotExist
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import connection
 from django.db.models import Prefetch
 from django.db.models.query import get_prefetcher
@@ -9,10 +9,12 @@ from django.test import TestCase, override_settings
 from django.utils import six
 from django.utils.encoding import force_text
 
-from .models import (Author, Bio, Book, Reader, Qualification, Teacher, Department,
-    TaggedItem, Bookmark, AuthorAddress, FavoriteAuthors, AuthorWithAge,
-    BookWithYear, BookReview, Person, House, Room, Employee, Comment,
-    LessonEntry, WordEntry, Author2)
+from .models import (
+    Author, Author2, AuthorAddress, AuthorWithAge, Bio, Book, Bookmark,
+    BookReview, BookWithYear, Comment, Department, Employee, FavoriteAuthors,
+    House, LessonEntry, Person, Qualification, Reader, Room, TaggedItem,
+    Teacher, WordEntry,
+)
 
 
 class PrefetchRelatedTests(TestCase):
@@ -220,6 +222,28 @@ class PrefetchRelatedTests(TestCase):
 
         self.assertIn('prefetch_related', str(cm.exception))
         self.assertIn("name", str(cm.exception))
+
+    def test_forward_m2m_to_attr_conflict(self):
+        msg = 'to_attr=authors conflicts with a field on the Book model.'
+        authors = Author.objects.all()
+        with self.assertRaisesMessage(ValueError, msg):
+            list(Book.objects.prefetch_related(
+                Prefetch('authors', queryset=authors, to_attr='authors'),
+            ))
+        # Without the ValueError, an author was deleted due to the implicit
+        # save of the relation assignment.
+        self.assertEqual(self.book1.authors.count(), 3)
+
+    def test_reverse_m2m_to_attr_conflict(self):
+        msg = 'to_attr=books conflicts with a field on the Author model.'
+        poems = Book.objects.filter(title='Poems')
+        with self.assertRaisesMessage(ValueError, msg):
+            list(Author.objects.prefetch_related(
+                Prefetch('books', queryset=poems, to_attr='books'),
+            ))
+        # Without the ValueError, a book was deleted due to the implicit
+        # save of reverse relation assignment.
+        self.assertEqual(self.author1.books.count(), 2)
 
 
 class CustomPrefetchTests(TestCase):
@@ -653,9 +677,9 @@ class DefaultManagerTests(TestCase):
             # the default manager on teachers to immediately get all the related
             # qualifications, since this will do one query per teacher.
             qs = Department.objects.prefetch_related('teachers')
-            depts = "".join(["%s department: %s\n" %
-                             (dept.name, ", ".join(six.text_type(t) for t in dept.teachers.all()))
-                             for dept in qs])
+            depts = "".join("%s department: %s\n" %
+                            (dept.name, ", ".join(six.text_type(t) for t in dept.teachers.all()))
+                            for dept in qs)
 
             self.assertEqual(depts,
                              "English department: Mr Cleese (BA, BSci, MA, PhD), Mr Idle (BA)\n"
@@ -990,9 +1014,9 @@ class MultiDbTests(TestCase):
         # Forward
         qs1 = B.prefetch_related('authors')
         with self.assertNumQueries(2, using='other'):
-            books = "".join(["%s (%s)\n" %
-                             (book.title, ", ".join(a.name for a in book.authors.all()))
-                             for book in qs1])
+            books = "".join("%s (%s)\n" %
+                            (book.title, ", ".join(a.name for a in book.authors.all()))
+                            for book in qs1)
         self.assertEqual(books,
                          "Poems (Charlotte, Anne, Emily)\n"
                          "Jane Eyre (Charlotte)\n"
@@ -1002,9 +1026,9 @@ class MultiDbTests(TestCase):
         # Reverse
         qs2 = A.prefetch_related('books')
         with self.assertNumQueries(2, using='other'):
-            authors = "".join(["%s: %s\n" %
-                               (author.name, ", ".join(b.title for b in author.books.all()))
-                               for author in qs2])
+            authors = "".join("%s: %s\n" %
+                              (author.name, ", ".join(b.title for b in author.books.all()))
+                              for author in qs2)
         self.assertEqual(authors,
                          "Charlotte: Poems, Jane Eyre\n"
                          "Anne: Poems\n"

@@ -213,6 +213,23 @@ ones:
     unless you want to override the default primary-key behavior. For more,
     see :ref:`automatic-primary-key-fields`.
 
+    The primary key field is read-only. If you change the value of the primary
+    key on an existing object and then save it, a new object will be created
+    alongside the old one. For example::
+
+        from django.db import models
+
+        class Fruit(models.Model):
+            name = models.CharField(max_length=100, primary_key=True)
+
+    .. code-block:: pycon
+
+        >>> fruit = Fruit.objects.create(name='Apple')
+        >>> fruit.name = 'Pear'
+        >>> fruit.save()
+        >>> Fruit.objects.values_list('name', flat=True)
+        ['Apple', 'Pear']
+
 :attr:`~Field.unique`
     If ``True``, this field must be unique throughout the table.
 
@@ -808,9 +825,11 @@ code will automatically support those arguments when they are added.
 
     Note that the :meth:`~Model.delete()` method for an object is not
     necessarily called when :ref:`deleting objects in bulk using a
-    QuerySet<topics-db-queries-delete>`. To ensure customized delete logic
-    gets executed, you can use :data:`~django.db.models.signals.pre_delete`
-    and/or :data:`~django.db.models.signals.post_delete` signals.
+    QuerySet <topics-db-queries-delete>` or as a result of a :attr:`cascading
+    delete <django.db.models.ForeignKey.on_delete>`. To ensure customized
+    delete logic gets executed, you can use
+    :data:`~django.db.models.signals.pre_delete` and/or
+    :data:`~django.db.models.signals.post_delete` signals.
 
     Unfortunately, there isn't a workaround when
     :meth:`creating<django.db.models.query.QuerySet.bulk_create>` or
@@ -1093,7 +1112,7 @@ Specifying the parent link field
 
 As mentioned, Django will automatically create a
 :class:`~django.db.models.OneToOneField` linking your child
-class back any non-abstract parent models. If you want to control the
+class back to any non-abstract parent models. If you want to control the
 name of the attribute linking back to the parent, you can create your
 own :class:`~django.db.models.OneToOneField` and set
 :attr:`parent_link=True <django.db.models.OneToOneField.parent_link>`
@@ -1177,9 +1196,6 @@ can't inherit from multiple non-abstract models as the proxy model doesn't
 provide any connection between the rows in the different database tables. A
 proxy model can inherit from any number of abstract model classes, providing
 they do *not* define any model fields.
-
-Proxy models inherit any ``Meta`` options that they don't define from their
-non-abstract model parent (the model they are proxying for).
 
 Proxy model managers
 ~~~~~~~~~~~~~~~~~~~~

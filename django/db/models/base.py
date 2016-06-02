@@ -4,30 +4,39 @@ import copy
 import inspect
 import sys
 import warnings
+from itertools import chain
 
 from django.apps import apps
 from django.apps.config import MODELS_MODULE_NAME
 from django.conf import settings
 from django.core import checks
-from django.core.exceptions import (ObjectDoesNotExist,
-    MultipleObjectsReturned, FieldError, ValidationError, NON_FIELD_ERRORS)
-from django.db import (router, connections, transaction, DatabaseError,
-    DEFAULT_DB_ALIAS, DJANGO_VERSION_PICKLE_KEY)
+from django.core.exceptions import (
+    NON_FIELD_ERRORS, FieldDoesNotExist, FieldError, ImproperlyConfigured,
+    MultipleObjectsReturned, ObjectDoesNotExist, ValidationError,
+)
+from django.db import (
+    DEFAULT_DB_ALIAS, DJANGO_VERSION_PICKLE_KEY, DatabaseError, connections,
+    router, transaction,
+)
+from django.db.models import signals
+from django.db.models.constants import LOOKUP_SEP
 from django.db.models.deletion import Collector
-from django.db.models.fields import AutoField, FieldDoesNotExist
-from django.db.models.fields.related import (ForeignObjectRel, ManyToOneRel,
-    OneToOneField, add_lazy_relation)
+from django.db.models.fields import AutoField
+from django.db.models.fields.related import (
+    ForeignObjectRel, ManyToOneRel, OneToOneField, add_lazy_relation,
+)
 from django.db.models.manager import ensure_default_manager
 from django.db.models.options import Options
 from django.db.models.query import Q
-from django.db.models.query_utils import DeferredAttribute, deferred_class_factory
-from django.db.models import signals
+from django.db.models.query_utils import (
+    DeferredAttribute, deferred_class_factory,
+)
 from django.utils import six
 from django.utils.deprecation import RemovedInDjango19Warning
 from django.utils.encoding import force_str, force_text
 from django.utils.functional import curry
 from django.utils.six.moves import zip
-from django.utils.text import get_text_list, capfirst
+from django.utils.text import capfirst, get_text_list
 from django.utils.translation import ugettext_lazy as _
 from django.utils.version import get_version
 
@@ -100,13 +109,11 @@ class ModelBase(type):
                 msg = (
                     "Model class %s.%s doesn't declare an explicit app_label "
                     "and either isn't in an application in INSTALLED_APPS or "
-                    "else was imported before its application was loaded. " %
+                    "else was imported before its application was loaded. "
+                    "This will no longer be supported in Django 1.9." %
                     (module, name))
-                if abstract:
-                    msg += "Its app_label will be set to None in Django 1.9."
-                else:
-                    msg += "This will no longer be supported in Django 1.9."
-                warnings.warn(msg, RemovedInDjango19Warning, stacklevel=2)
+                if not abstract:
+                    warnings.warn(msg, RemovedInDjango19Warning, stacklevel=2)
 
                 model_module = sys.modules[new_class.__module__]
                 package_components = model_module.__name__.split('.')
@@ -115,8 +122,14 @@ class ModelBase(type):
                     app_label_index = package_components.index(MODELS_MODULE_NAME) + 1
                 except ValueError:
                     app_label_index = 1
-                kwargs = {"app_label": package_components[app_label_index]}
-
+                try:
+                    kwargs = {"app_label": package_components[app_label_index]}
+                except IndexError:
+                    raise ImproperlyConfigured(
+                        'Unable to detect the app label for model "%s." '
+                        'Ensure that its module, "%s", is located inside an installed '
+                        'app.' % (new_class.__name__, model_module.__name__)
+                    )
             else:
                 kwargs = {"app_label": app_config.label}
 
@@ -176,12 +189,12 @@ class ModelBase(type):
             new_class.add_to_class(obj_name, obj)
 
         # All the fields of any type declared on this model
-        new_fields = (
-            new_class._meta.local_fields +
-            new_class._meta.local_many_to_many +
+        new_fields = chain(
+            new_class._meta.local_fields,
+            new_class._meta.local_many_to_many,
             new_class._meta.virtual_fields
         )
-        field_names = set(f.name for f in new_fields)
+        field_names = {f.name for f in new_fields}
 
         # Basic setup for proxy models.
         if is_proxy:
@@ -203,6 +216,7 @@ class ModelBase(type):
                 raise TypeError("Proxy model '%s' has no non-abstract model base class." % name)
             new_class._meta.setup_proxy(base)
             new_class._meta.concrete_model = base._meta.concrete_model
+            base._meta.concrete_model._meta.proxied_children.append(new_class._meta)
         else:
             new_class._meta.concrete_model = new_class
 
@@ -258,7 +272,8 @@ class ModelBase(type):
             else:
                 # .. and abstract ones.
                 for field in parent_fields:
-                    new_class.add_to_class(field.name, copy.deepcopy(field))
+                    new_field = copy.deepcopy(field)
+                    new_class.add_to_class(field.name, new_field)
 
                 # Pass any non-abstract parent classes onto child.
                 new_class._meta.parents.update(base._meta.parents)
@@ -343,7 +358,7 @@ class ModelBase(type):
 
         # Give the class a docstring -- its definition.
         if cls.__doc__ is None:
-            cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.attname for f in opts.fields))
+            cls.__doc__ = "%s(%s)" % (cls.__name__, ", ".join(f.name for f in opts.fields))
 
         get_absolute_url_override = settings.ABSOLUTE_URL_OVERRIDES.get(
             '%s.%s' % (opts.app_label, opts.model_name)
@@ -554,6 +569,71 @@ class Model(six.with_metaclass(ModelBase)):
 
     pk = property(_get_pk_val, _set_pk_val)
 
+    def get_deferred_fields(self):
+        """
+        Returns a set containing names of deferred fields for this instance.
+        """
+        return {
+            f.attname for f in self._meta.concrete_fields
+            if isinstance(self.__class__.__dict__.get(f.attname), DeferredAttribute)
+        }
+
+    def refresh_from_db(self, using=None, fields=None, **kwargs):
+        """
+        Reloads field values from the database.
+
+        By default, the reloading happens from the database this instance was
+        loaded from, or by the read router if this instance wasn't loaded from
+        any database. The using parameter will override the default.
+
+        Fields can be used to specify which fields to reload. The fields
+        should be an iterable of field attnames. If fields is None, then
+        all non-deferred fields are reloaded.
+
+        When accessing deferred fields of an instance, the deferred loading
+        of the field will call this method.
+        """
+        if fields is not None:
+            if len(fields) == 0:
+                return
+            if any(LOOKUP_SEP in f for f in fields):
+                raise ValueError(
+                    'Found "%s" in fields argument. Relations and transforms '
+                    'are not allowed in fields.' % LOOKUP_SEP)
+
+        db = using if using is not None else self._state.db
+        if self._deferred:
+            non_deferred_model = self._meta.proxy_for_model
+        else:
+            non_deferred_model = self.__class__
+        db_instance_qs = non_deferred_model._default_manager.using(db).filter(pk=self.pk)
+
+        # Use provided fields, if not set then reload all non-deferred fields.
+        if fields is not None:
+            fields = list(fields)
+            db_instance_qs = db_instance_qs.only(*fields)
+        elif self._deferred:
+            deferred_fields = self.get_deferred_fields()
+            fields = [f.attname for f in self._meta.concrete_fields
+                      if f.attname not in deferred_fields]
+            db_instance_qs = db_instance_qs.only(*fields)
+
+        db_instance = db_instance_qs.get()
+        non_loaded_fields = db_instance.get_deferred_fields()
+        for field in self._meta.concrete_fields:
+            if field.attname in non_loaded_fields:
+                # This field wasn't refreshed - skip ahead.
+                continue
+            setattr(self, field.attname, getattr(db_instance, field.attname))
+            # Throw away stale foreign key references.
+            if field.rel and field.get_cache_name() in self.__dict__:
+                rel_instance = getattr(self, field.get_cache_name())
+                local_val = getattr(db_instance, field.attname)
+                related_val = None if rel_instance is None else getattr(rel_instance, field.related_field.attname)
+                if local_val != related_val or (local_val is None and related_val is None):
+                    del self.__dict__[field.get_cache_name()]
+        self._state.db = db_instance._state.db
+
     def serializable_value(self, field_name):
         """
         Returns the value of the field name for this instance. If the field is
@@ -566,7 +646,7 @@ class Model(six.with_metaclass(ModelBase)):
         and not use this method.
         """
         try:
-            field = self._meta.get_field_by_name(field_name)[0]
+            field = self._meta.get_field(field_name)
         except FieldDoesNotExist:
             return getattr(self, field_name)
         return getattr(self, field.attname)
@@ -581,6 +661,30 @@ class Model(six.with_metaclass(ModelBase)):
         that the "save" must be an SQL insert or update (or equivalent for
         non-SQL backends), respectively. Normally, they should not be set.
         """
+        # Ensure that a model instance without a PK hasn't been assigned to
+        # a ForeignKey or OneToOneField on this model. If the field is
+        # nullable, allowing the save() would result in silent data loss.
+        for field in self._meta.concrete_fields:
+            if field.is_relation:
+                # If the related field isn't cached, then an instance hasn't
+                # been assigned and there's no need to worry about this check.
+                try:
+                    getattr(self, field.get_cache_name())
+                except AttributeError:
+                    continue
+                obj = getattr(self, field.name, None)
+                # A pk may have been assigned manually to a model instance not
+                # saved to the database (or auto-generated in a case like
+                # UUIDField), but we allow the save to proceed and rely on the
+                # database to raise an IntegrityError if applicable. If
+                # constraints aren't supported by the database, there's the
+                # unavoidable risk of data corruption.
+                if obj and obj.pk is None:
+                    raise ValueError(
+                        "save() prohibited to prevent data loss due to "
+                        "unsaved related object '%s'." % field.name
+                    )
+
         using = using or router.db_for_write(self.__class__, instance=self)
         if force_insert and (force_update or update_fields):
             raise ValueError("Cannot force both insert and updating in model saving.")
@@ -706,6 +810,9 @@ class Model(six.with_metaclass(ModelBase)):
                        if f.name in update_fields or f.attname in update_fields]
 
         pk_val = self._get_pk_val(meta)
+        if pk_val is None:
+            pk_val = meta.pk.get_pk_value_on_save(self)
+            setattr(self, meta.pk.attname, pk_val)
         pk_set = pk_val is not None
         if not pk_set and (force_update or update_fields):
             raise ValueError("Cannot force an update in save() with no primary key.")
@@ -829,7 +936,7 @@ class Model(six.with_metaclass(ModelBase)):
     def prepare_database_save(self, field):
         if self.pk is None:
             raise ValueError("Unsaved model instance %r cannot be used in an ORM query." % self)
-        return getattr(self, field.rel.field_name)
+        return getattr(self, field.rel.get_related_field().attname)
 
     def clean(self):
         """
@@ -870,7 +977,7 @@ class Model(six.with_metaclass(ModelBase)):
         unique_checks = []
 
         unique_togethers = [(self.__class__, self._meta.unique_together)]
-        for parent_class in self._meta.parents.keys():
+        for parent_class in self._meta.get_parent_list():
             if parent_class._meta.unique_together:
                 unique_togethers.append((parent_class, parent_class._meta.unique_together))
 
@@ -890,7 +997,7 @@ class Model(six.with_metaclass(ModelBase)):
         # the list of checks.
 
         fields_with_class = [(self.__class__, self._meta.local_fields)]
-        for parent_class in self._meta.parents.keys():
+        for parent_class in self._meta.get_parent_list():
             fields_with_class.append((parent_class, parent_class._meta.local_fields))
 
         for model_class, fields in fields_with_class:
@@ -1131,7 +1238,8 @@ class Model(six.with_metaclass(ModelBase)):
                 app_label, model_name = cls._meta.swapped.split('.')
                 errors.append(
                     checks.Error(
-                        ("'%s' references '%s.%s', which has not been installed, or is abstract.") % (
+                        "'%s' references '%s.%s', which has not been "
+                        "installed, or is abstract." % (
                             cls._meta.swappable, app_label, model_name
                         ),
                         hint=None,
@@ -1161,8 +1269,7 @@ class Model(six.with_metaclass(ModelBase)):
         """ Perform all manager checks. """
 
         errors = []
-        managers = cls._meta.concrete_managers + cls._meta.abstract_managers
-        for __, __, manager in managers:
+        for __, manager, __ in cls._meta.managers:
             errors.extend(manager.check(**kwargs))
         return errors
 
@@ -1198,8 +1305,8 @@ class Model(six.with_metaclass(ModelBase)):
             if signature in seen_intermediary_signatures:
                 errors.append(
                     checks.Error(
-                        ("The model has two many-to-many relations through "
-                         "the intermediate model '%s.%s'.") % (
+                        "The model has two many-to-many relations through "
+                        "the intermediate model '%s.%s'." % (
                             f.rel.through._meta.app_label,
                             f.rel.through._meta.object_name
                         ),
@@ -1222,8 +1329,8 @@ class Model(six.with_metaclass(ModelBase)):
         if fields and not fields[0].primary_key and cls._meta.pk.name == 'id':
             return [
                 checks.Error(
-                    ("'id' can only be used as a field name if the field also "
-                     "sets 'primary_key=True'."),
+                    "'id' can only be used as a field name if the field also "
+                    "sets 'primary_key=True'.",
                     hint=None,
                     obj=cls,
                     id='models.E004',
@@ -1240,15 +1347,15 @@ class Model(six.with_metaclass(ModelBase)):
         used_fields = {}  # name or attname -> field
 
         # Check that multi-inheritance doesn't cause field name shadowing.
-        for parent in cls._meta.parents:
+        for parent in cls._meta.get_parent_list():
             for f in parent._meta.local_fields:
                 clash = used_fields.get(f.name) or used_fields.get(f.attname) or None
                 if clash:
                     errors.append(
                         checks.Error(
-                            ("The field '%s' from parent model "
-                             "'%s' clashes with the field '%s' "
-                             "from parent model '%s'.") % (
+                            "The field '%s' from parent model "
+                            "'%s' clashes with the field '%s' "
+                            "from parent model '%s'." % (
                                 clash.name, clash.model._meta,
                                 f.name, f.model._meta
                             ),
@@ -1273,8 +1380,8 @@ class Model(six.with_metaclass(ModelBase)):
             if clash and not id_conflict:
                 errors.append(
                     checks.Error(
-                        ("The field '%s' clashes with the field '%s' "
-                         "from model '%s'.") % (
+                        "The field '%s' clashes with the field '%s' "
+                        "from model '%s'." % (
                             f.name, clash.name, clash.model._meta
                         ),
                         hint=None,
@@ -1300,7 +1407,8 @@ class Model(six.with_metaclass(ModelBase)):
             if column_name and column_name in used_column_names:
                 errors.append(
                     checks.Error(
-                        "Field '%s' has column name '%s' that is used by another field." % (f.name, column_name),
+                        "Field '%s' has column name '%s' that is used by "
+                        "another field." % (f.name, column_name),
                         hint="Specify a 'db_column' for the field.",
                         obj=cls,
                         id='models.E007'
@@ -1375,15 +1483,22 @@ class Model(six.with_metaclass(ModelBase)):
     def _check_local_fields(cls, fields, option):
         from django.db import models
 
+        # In order to avoid hitting the relation tree prematurely, we use our
+        # own fields_map instead of using get_field()
+        forward_fields_map = {
+            field.name: field for field in cls._meta._get_fields(reverse=False)
+        }
+
         errors = []
         for field_name in fields:
             try:
-                field = cls._meta.get_field(field_name,
-                    many_to_many=True)
-            except models.FieldDoesNotExist:
+                field = forward_fields_map[field_name]
+            except KeyError:
                 errors.append(
                     checks.Error(
-                        "'%s' refers to the non-existent field '%s'." % (option, field_name),
+                        "'%s' refers to the non-existent field '%s'." % (
+                            option, field_name,
+                        ),
                         hint=None,
                         obj=cls,
                         id='models.E012',
@@ -1393,9 +1508,9 @@ class Model(six.with_metaclass(ModelBase)):
                 if isinstance(field.rel, models.ManyToManyRel):
                     errors.append(
                         checks.Error(
-                            ("'%s' refers to a ManyToManyField '%s', but "
-                             "ManyToManyFields are not permitted in '%s'.") % (
-                                option, field_name, option
+                            "'%s' refers to a ManyToManyField '%s', but "
+                            "ManyToManyFields are not permitted in '%s'." % (
+                                option, field_name, option,
                             ),
                             hint=None,
                             obj=cls,
@@ -1407,7 +1522,7 @@ class Model(six.with_metaclass(ModelBase)):
                         checks.Error(
                             ("'%s' refers to field '%s' which is not local "
                              "to model '%s'.") % (
-                                option, field_name, cls._meta.object_name
+                                option, field_name, cls._meta.object_name,
                             ),
                             hint=("This issue may be caused by multi-table "
                                   "inheritance."),
@@ -1421,9 +1536,6 @@ class Model(six.with_metaclass(ModelBase)):
     def _check_ordering(cls):
         """ Check "ordering" option -- is it a list of strings and do all fields
         exist? """
-
-        from django.db.models import FieldDoesNotExist
-
         if not cls._meta.ordering:
             return []
 
@@ -1439,7 +1551,6 @@ class Model(six.with_metaclass(ModelBase)):
             ]
 
         errors = []
-
         fields = cls._meta.ordering
 
         # Skip '?' fields.
@@ -1457,28 +1568,30 @@ class Model(six.with_metaclass(ModelBase)):
 
         # Skip ordering on pk. This is always a valid order_by field
         # but is an alias and therefore won't be found by opts.get_field.
-        fields = (f for f in fields if f != 'pk')
+        fields = {f for f in fields if f != 'pk'}
 
-        for field_name in fields:
-            try:
-                cls._meta.get_field(field_name, many_to_many=False)
-            except FieldDoesNotExist:
-                if field_name.endswith('_id'):
-                    try:
-                        field = cls._meta.get_field(field_name[:-3], many_to_many=False)
-                    except FieldDoesNotExist:
-                        pass
-                    else:
-                        if field.attname == field_name:
-                            continue
-                errors.append(
-                    checks.Error(
-                        "'ordering' refers to the non-existent field '%s'." % field_name,
-                        hint=None,
-                        obj=cls,
-                        id='models.E015',
-                    )
+        # Check for invalid or non-existent fields in ordering.
+        invalid_fields = []
+
+        # Any field name that is not present in field_names does not exist.
+        # Also, ordering by m2m fields is not allowed.
+        opts = cls._meta
+        valid_fields = set(chain.from_iterable(
+            (f.name, f.attname) if not (f.auto_created and not f.concrete) else (f.field.related_query_name(),)
+            for f in chain(opts.fields, opts.related_objects)
+        ))
+
+        invalid_fields.extend(fields - valid_fields)
+
+        for invalid_field in invalid_fields:
+            errors.append(
+                checks.Error(
+                    "'ordering' refers to the non-existent field '%s'." % invalid_field,
+                    hint=None,
+                    obj=cls,
+                    id='models.E015',
                 )
+            )
         return errors
 
     @classmethod
@@ -1494,7 +1607,7 @@ class Model(six.with_metaclass(ModelBase)):
         # Find the minimum max allowed length among all specified db_aliases.
         for db in settings.DATABASES.keys():
             # skip databases where the model won't be created
-            if not router.allow_migrate(db, cls):
+            if not router.allow_migrate_model(db, cls):
                 continue
             connection = connections[db]
             max_name_length = connection.ops.max_name_length()
@@ -1561,13 +1674,13 @@ class Model(six.with_metaclass(ModelBase)):
 def method_set_order(ordered_obj, self, id_list, using=None):
     if using is None:
         using = DEFAULT_DB_ALIAS
-    rel_val = getattr(self, ordered_obj._meta.order_with_respect_to.rel.field_name)
-    order_name = ordered_obj._meta.order_with_respect_to.name
+    order_wrt = ordered_obj._meta.order_with_respect_to
+    filter_args = order_wrt.get_forward_related_filter(self)
     # FIXME: It would be nice if there was an "update many" version of update
     # for situations like this.
     with transaction.atomic(using=using, savepoint=False):
         for i, j in enumerate(id_list):
-            ordered_obj.objects.filter(**{'pk': j, order_name: rel_val}).update(_order=i)
+            ordered_obj.objects.filter(pk=j, **filter_args).update(_order=i)
 
 
 def method_get_order(ordered_obj, self):
@@ -1595,6 +1708,8 @@ def model_unpickle(model_id, attrs, factory):
     Used to unpickle Model subclasses with deferred fields.
     """
     if isinstance(model_id, tuple):
+        if not apps.ready:
+            apps.populate(settings.INSTALLED_APPS)
         model = apps.get_model(*model_id)
     else:
         # Backwards compat - the model was cached directly in earlier versions.

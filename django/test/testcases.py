@@ -1,10 +1,7 @@
 from __future__ import unicode_literals
 
-from collections import Counter
-from copy import copy
 import difflib
 import errno
-from functools import wraps
 import json
 import os
 import posixpath
@@ -14,34 +11,40 @@ import sys
 import threading
 import unittest
 import warnings
-from unittest import skipIf         # NOQA: Imported here for backward compatibility
+from collections import Counter
+from copy import copy
+from functools import wraps
+from unittest import skipIf  # NOQA: Imported here for backward compatibility
 from unittest.util import safe_repr
 
 from django.apps import apps
 from django.conf import settings
 from django.core import mail
-from django.core.exceptions import ValidationError, ImproperlyConfigured
-from django.core.handlers.wsgi import get_path_info, WSGIHandler
+from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.handlers.wsgi import WSGIHandler, get_path_info
 from django.core.management import call_command
 from django.core.management.color import no_style
 from django.core.management.commands import flush
 from django.core.servers.basehttp import WSGIRequestHandler, WSGIServer
 from django.core.urlresolvers import clear_url_caches, set_urlconf
-from django.db import connection, connections, DEFAULT_DB_ALIAS, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, connections, transaction
 from django.forms.fields import CharField
 from django.http import QueryDict
 from django.test.client import Client
 from django.test.html import HTMLParseError, parse_html
 from django.test.signals import setting_changed, template_rendered
-from django.test.utils import (CaptureQueriesContext, ContextList,
-    override_settings, modify_settings, compare_xml)
-from django.utils.deprecation import RemovedInDjango20Warning
-from django.utils.encoding import force_text
+from django.test.utils import (
+    CaptureQueriesContext, ContextList, compare_xml, modify_settings,
+    override_settings,
+)
 from django.utils import six
-from django.utils.six.moves.urllib.parse import urlsplit, urlunsplit, urlparse, unquote
+from django.utils.deprecation import RemovedInDjango110Warning
+from django.utils.encoding import force_text
+from django.utils.six.moves.urllib.parse import (
+    unquote, urlparse, urlsplit, urlunsplit,
+)
 from django.utils.six.moves.urllib.request import url2pathname
 from django.views.static import serve
-
 
 __all__ = ('TestCase', 'TransactionTestCase',
            'SimpleTestCase', 'skipIfDBFeature', 'skipUnlessDBFeature')
@@ -146,6 +149,7 @@ class SimpleTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        super(SimpleTestCase, cls).setUpClass()
         if cls._overridden_settings:
             cls._cls_overridden_context = override_settings(**cls._overridden_settings)
             cls._cls_overridden_context.enable()
@@ -161,6 +165,7 @@ class SimpleTestCase(unittest.TestCase):
         if hasattr(cls, '_cls_overridden_context'):
             cls._cls_overridden_context.disable()
             delattr(cls, '_cls_overridden_context')
+        super(SimpleTestCase, cls).tearDownClass()
 
     def __call__(self, result=None):
         """
@@ -201,9 +206,9 @@ class SimpleTestCase(unittest.TestCase):
         if hasattr(self, 'urls'):
             warnings.warn(
                 "SimpleTestCase.urls is deprecated and will be removed in "
-                "Django 2.0. Use @override_settings(ROOT_URLCONF=...) "
+                "Django 1.10. Use @override_settings(ROOT_URLCONF=...) "
                 "in %s instead." % self.__class__.__name__,
-                RemovedInDjango20Warning, stacklevel=2)
+                RemovedInDjango110Warning, stacklevel=2)
             set_urlconf(None)
             self._old_root_urlconf = settings.ROOT_URLCONF
             settings.ROOT_URLCONF = self.urls
@@ -560,8 +565,7 @@ class SimpleTestCase(unittest.TestCase):
             msg_prefix + "Template '%s' was used unexpectedly in rendering"
             " the response" % template_name)
 
-    def assertRaisesMessage(self, expected_exception, expected_message,
-                           callable_obj=None, *args, **kwargs):
+    def assertRaisesMessage(self, expected_exception, expected_message, *args, **kwargs):
         """
         Asserts that the message in a raised exception matches the passed
         value.
@@ -569,12 +573,17 @@ class SimpleTestCase(unittest.TestCase):
         Args:
             expected_exception: Exception class expected to be raised.
             expected_message: expected error message string value.
-            callable_obj: Function to be called.
-            args: Extra args.
+            args: Function to be called and extra positional args.
             kwargs: Extra kwargs.
         """
+        # callable_obj was a documented kwarg in older version of Django, but
+        # had to be removed due to a bad fix for http://bugs.python.org/issue24134
+        # inadvertently making its way into Python 2.7.10.
+        callable_obj = kwargs.pop('callable_obj', None)
+        if callable_obj:
+            args = (callable_obj,) + args
         return six.assertRaisesRegex(self, expected_exception,
-                re.escape(expected_message), callable_obj, *args, **kwargs)
+                re.escape(expected_message), *args, **kwargs)
 
     def assertFieldOutput(self, fieldclass, valid, invalid, field_args=None,
             field_kwargs=None, empty_value=''):
@@ -786,10 +795,11 @@ class TransactionTestCase(SimpleTestCase):
 
             raise
 
-    def _databases_names(self, include_mirrors=True):
+    @classmethod
+    def _databases_names(cls, include_mirrors=True):
         # If the test case has a multi_db=True flag, act on all databases,
         # including mirrors or not. Otherwise, just on the default DB.
-        if getattr(self, 'multi_db', False):
+        if getattr(cls, 'multi_db', False):
             return [alias for alias in connections
                     if include_mirrors or not connections[alias].settings_dict['TEST']['MIRROR']]
         else:
@@ -829,6 +839,9 @@ class TransactionTestCase(SimpleTestCase):
                 call_command('loaddata', *self.fixtures,
                              **{'verbosity': 0, 'database': db_name})
 
+    def _should_reload_connections(self):
+        return True
+
     def _post_teardown(self):
         """Performs any post-test things. This includes:
 
@@ -839,14 +852,15 @@ class TransactionTestCase(SimpleTestCase):
         try:
             self._fixture_teardown()
             super(TransactionTestCase, self)._post_teardown()
-            # Some DB cursors include SQL statements as part of cursor
-            # creation. If you have a test that does rollback, the effect of
-            # these statements is lost, which can effect the operation of
-            # tests (e.g., losing a timezone setting causing objects to be
-            # created with the wrong time). To make sure this doesn't happen,
-            # get a clean connection at the start of every test.
-            for conn in connections.all():
-                conn.close()
+            if self._should_reload_connections():
+                # Some DB cursors include SQL statements as part of cursor
+                # creation. If you have a test that does a rollback, the effect
+                # of these statements is lost, which can affect the operation of
+                # tests (e.g., losing a timezone setting causing objects to be
+                # created with the wrong time). To make sure this doesn't
+                # happen, get a clean connection at the start of every test.
+                for conn in connections.all():
+                    conn.close()
         finally:
             if self.available_apps is not None:
                 apps.unset_available_apps()
@@ -899,44 +913,89 @@ def connections_support_transactions():
 
 class TestCase(TransactionTestCase):
     """
-    Does basically the same as TransactionTestCase, but surrounds every test
-    with a transaction, monkey-patches the real transaction management routines
-    to do nothing, and rollsback the test transaction at the end of the test.
-    You have to use TransactionTestCase, if you need transaction management
-    inside a test.
+    Similar to TransactionTestCase, but uses `transaction.atomic()` to achieve
+    test isolation.
+
+    In most situation, TestCase should be prefered to TransactionTestCase as
+    it allows faster execution. However, there are some situations where using
+    TransactionTestCase might be necessary (e.g. testing some transactional
+    behavior).
+
+    On database backends with no transaction support, TestCase behaves as
+    TransactionTestCase.
     """
+    @classmethod
+    def _enter_atomics(cls):
+        """Helper method to open atomic blocks for multiple databases"""
+        atomics = {}
+        for db_name in cls._databases_names():
+            atomics[db_name] = transaction.atomic(using=db_name)
+            atomics[db_name].__enter__()
+        return atomics
+
+    @classmethod
+    def _rollback_atomics(cls, atomics):
+        """Rollback atomic blocks opened through the previous method"""
+        for db_name in reversed(cls._databases_names()):
+            transaction.set_rollback(True, using=db_name)
+            atomics[db_name].__exit__(None, None, None)
+
+    @classmethod
+    def setUpClass(cls):
+        super(TestCase, cls).setUpClass()
+        if not connections_support_transactions():
+            return
+        cls.cls_atomics = cls._enter_atomics()
+
+        if cls.fixtures:
+            for db_name in cls._databases_names(include_mirrors=False):
+                    try:
+                        call_command('loaddata', *cls.fixtures, **{
+                            'verbosity': 0,
+                            'commit': False,
+                            'database': db_name,
+                        })
+                    except Exception:
+                        cls._rollback_atomics(cls.cls_atomics)
+                        raise
+        try:
+            cls.setUpTestData()
+        except Exception:
+            cls._rollback_atomics(cls.cls_atomics)
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        if connections_support_transactions():
+            cls._rollback_atomics(cls.cls_atomics)
+            for conn in connections.all():
+                conn.close()
+        super(TestCase, cls).tearDownClass()
+
+    @classmethod
+    def setUpTestData(cls):
+        """Load initial data for the TestCase"""
+        pass
+
+    def _should_reload_connections(self):
+        if connections_support_transactions():
+            return False
+        return super(TestCase, self)._should_reload_connections()
 
     def _fixture_setup(self):
         if not connections_support_transactions():
+            # If the backend does not support transactions, we should reload
+            # class data before each test
+            self.setUpTestData()
             return super(TestCase, self)._fixture_setup()
 
         assert not self.reset_sequences, 'reset_sequences cannot be used on TestCase instances'
-
-        self.atomics = {}
-        for db_name in self._databases_names():
-            self.atomics[db_name] = transaction.atomic(using=db_name)
-            self.atomics[db_name].__enter__()
-
-        for db_name in self._databases_names(include_mirrors=False):
-            if self.fixtures:
-                try:
-                    call_command('loaddata', *self.fixtures,
-                                 **{
-                                     'verbosity': 0,
-                                     'commit': False,
-                                     'database': db_name,
-                                 })
-                except Exception:
-                    self._fixture_teardown()
-                    raise
+        self.atomics = self._enter_atomics()
 
     def _fixture_teardown(self):
         if not connections_support_transactions():
             return super(TestCase, self)._fixture_teardown()
-
-        for db_name in reversed(self._databases_names()):
-            transaction.set_rollback(True, using=db_name)
-            self.atomics[db_name].__exit__(None, None, None)
+        self._rollback_atomics(self.atomics)
 
 
 class CheckCondition(object):
@@ -1166,8 +1225,7 @@ class LiveServerTestCase(TransactionTestCase):
         for conn in connections.all():
             # If using in-memory sqlite databases, pass the connections to
             # the server thread.
-            if (conn.vendor == 'sqlite'
-                    and conn.settings_dict['NAME'] == ':memory:'):
+            if conn.vendor == 'sqlite' and conn.is_in_memory_db(conn.settings_dict['NAME']):
                 # Explicitly enable thread-shareability for this connection
                 conn.allow_thread_sharing = True
                 connections_override[conn.alias] = conn
@@ -1210,8 +1268,6 @@ class LiveServerTestCase(TransactionTestCase):
             cls._tearDownClassInternal()
             raise cls.server_thread.error
 
-        super(LiveServerTestCase, cls).setUpClass()
-
     @classmethod
     def _tearDownClassInternal(cls):
         # There may not be a 'server_thread' attribute if setUpClass() for some
@@ -1221,10 +1277,9 @@ class LiveServerTestCase(TransactionTestCase):
             cls.server_thread.terminate()
             cls.server_thread.join()
 
-        # Restore sqlite connections' non-shareability
+        # Restore sqlite in-memory database connections' non-shareability
         for conn in connections.all():
-            if (conn.vendor == 'sqlite'
-                    and conn.settings_dict['NAME'] == ':memory:'):
+            if conn.vendor == 'sqlite' and conn.is_in_memory_db(conn.settings_dict['NAME']):
                 conn.allow_thread_sharing = False
 
     @classmethod

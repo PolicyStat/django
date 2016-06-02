@@ -6,6 +6,7 @@ is generated for the table on various manage.py operations.
 from django.db import models
 from django.utils.encoding import python_2_unicode_compatible
 
+
 #  All of these models are created in the database by Django.
 
 
@@ -128,7 +129,7 @@ class Unmanaged1(models.Model):
         db_table = "unmanaged_models_proxy1"
 
 
-# Unmanged with an m2m to unmanaged: the intermediary table won't be created.
+# Unmanaged with an m2m to unmanaged: the intermediary table won't be created.
 class Unmanaged2(models.Model):
     mm = models.ManyToManyField(Unmanaged1)
 

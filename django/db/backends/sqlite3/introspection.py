@@ -1,7 +1,8 @@
 import re
 
-from django.db.backends import BaseDatabaseIntrospection, FieldInfo, TableInfo
-
+from django.db.backends.base.introspection import (
+    BaseDatabaseIntrospection, FieldInfo, TableInfo,
+)
 
 field_size_re = re.compile(r'^\s*(?:var)?char\s*\(\s*(\d+)\s*\)\s*$')
 
@@ -87,10 +88,9 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
 
     def get_relations(self, cursor, table_name):
         """
-        Returns a dictionary of {field_index: (field_index_other_table, other_table)}
-        representing all relationships to the given table. Indexes are 0-based.
+        Return a dictionary of {field_name: (field_name_other_table, other_table)}
+        representing all relationships to the given table.
         """
-
         # Dictionary of relations to return
         relations = {}
 
@@ -106,16 +106,22 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         # Walk through and look for references to other tables. SQLite doesn't
         # really have enforced references, but since it echoes out the SQL used
         # to create the table we can look for REFERENCES statements used there.
-        for field_index, field_desc in enumerate(results.split(',')):
+        for field_desc in results.split(','):
             field_desc = field_desc.strip()
             if field_desc.startswith("UNIQUE"):
                 continue
 
-            m = re.search('references (.*) \(["|](.*)["|]\)', field_desc, re.I)
+            m = re.search('references (\S*) ?\(["|]?(.*)["|]?\)', field_desc, re.I)
             if not m:
                 continue
-
             table, column = [s.strip('"') for s in m.groups()]
+
+            if field_desc.startswith("FOREIGN KEY"):
+                # Find name of the target FK field
+                m = re.match('FOREIGN KEY\(([^\)]*)\).*', field_desc, re.I)
+                field_name = m.groups()[0].strip('"')
+            else:
+                field_name = field_desc.split()[0].strip('"')
 
             cursor.execute("SELECT sql FROM sqlite_master WHERE tbl_name = %s", [table])
             result = cursor.fetchall()[0]
@@ -123,14 +129,14 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
             li, ri = other_table_results.index('('), other_table_results.rindex(')')
             other_table_results = other_table_results[li + 1:ri]
 
-            for other_index, other_desc in enumerate(other_table_results.split(',')):
+            for other_desc in other_table_results.split(','):
                 other_desc = other_desc.strip()
                 if other_desc.startswith('UNIQUE'):
                     continue
 
-                name = other_desc.split(' ', 1)[0].strip('"')
-                if name == column:
-                    relations[field_index] = (other_index, table)
+                other_name = other_desc.split(' ', 1)[0].strip('"')
+                if other_name == column:
+                    relations[field_name] = (other_name, table)
                     break
 
         return relations
@@ -218,7 +224,10 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         constraints = {}
         # Get the index info
         cursor.execute("PRAGMA index_list(%s)" % self.connection.ops.quote_name(table_name))
-        for number, index, unique in cursor.fetchall():
+        for row in cursor.fetchall():
+            # Sqlite3 3.8.9+ has 5 columns, however older versions only give 3
+            # columns. Discard last 2 columns if there.
+            number, index, unique = row[:3]
             # Get the index info for that index
             cursor.execute('PRAGMA index_info(%s)' % self.connection.ops.quote_name(index))
             for index_rank, column_rank, column in cursor.fetchall():

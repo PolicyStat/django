@@ -6,25 +6,31 @@ from decimal import Decimal
 from unittest import skipUnless
 
 from django import forms
-from django.core.exceptions import FieldError, ImproperlyConfigured, NON_FIELD_ERRORS
+from django.core.exceptions import (
+    NON_FIELD_ERRORS, FieldError, ImproperlyConfigured,
+)
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.validators import ValidationError
 from django.db import connection
 from django.db.models.query import EmptyQuerySet
-from django.forms.models import (construct_instance, fields_for_model,
-    model_to_dict, modelform_factory, ModelFormMetaclass)
-from django.template import Template, Context
+from django.forms.models import (
+    ModelFormMetaclass, construct_instance, fields_for_model, model_to_dict,
+    modelform_factory,
+)
+from django.template import Context, Template
 from django.test import TestCase, skipUnlessDBFeature
-from django.utils._os import upath
 from django.utils import six
+from django.utils._os import upath
 
-from .models import (Article, ArticleStatus, Author, Author1, BetterWriter, BigInt, Book,
-    Category, CommaSeparatedInteger, CustomFF, CustomFieldForExclusionModel,
-    DerivedBook, DerivedPost, Document, ExplicitPK, FilePathModel, FlexibleDatePost, Homepage,
-    ImprovedArticle, ImprovedArticleWithParentLink, Inventory, Person, Photo, Post, Price,
-    Product, Publication, TextFile, Triple, Writer, WriterProfile,
-    Colour, ColourfulItem, DateTimePost, CustomErrorMessage,
-    test_images, StumpJoke, Character, Student)
+from .models import (
+    Article, ArticleStatus, Author, Author1, BetterWriter, BigInt, Book,
+    Category, Character, Colour, ColourfulItem, CommaSeparatedInteger,
+    CustomErrorMessage, CustomFF, CustomFieldForExclusionModel, DateTimePost,
+    DerivedBook, DerivedPost, Document, ExplicitPK, FilePathModel,
+    FlexibleDatePost, Homepage, ImprovedArticle, ImprovedArticleWithParentLink,
+    Inventory, Person, Photo, Post, Price, Product, Publication, Student,
+    StumpJoke, TextFile, Triple, Writer, WriterProfile, test_images,
+)
 
 if test_images:
     from .models import ImageFile, OptionalImageFile
@@ -955,10 +961,10 @@ class ModelToDictTests(TestCase):
         with self.assertNumQueries(0):
             d = model_to_dict(art)
 
-        #Ensure all many-to-many categories appear in model_to_dict
+        # Ensure all many-to-many categories appear in model_to_dict
         for c in categories:
             self.assertIn(c.pk, d['categories'])
-        #Ensure many-to-many relation appears as a list
+        # Ensure many-to-many relation appears as a list
         self.assertIsInstance(d['categories'], list)
 
 
@@ -1635,6 +1641,27 @@ class ModelMultipleChoiceFieldTests(TestCase):
         with self.assertNumQueries(1):
             template.render(Context({'field': field}))
 
+    def test_show_hidden_initial_changed_queries_efficiently(self):
+        class WriterForm(forms.Form):
+            persons = forms.ModelMultipleChoiceField(
+                show_hidden_initial=True, queryset=Writer.objects.all())
+
+        writers = (Writer.objects.create(name=str(x)) for x in range(0, 50))
+        writer_pks = tuple(x.pk for x in writers)
+        form = WriterForm(data={'initial-persons': writer_pks})
+        with self.assertNumQueries(1):
+            self.assertTrue(form.has_changed())
+
+    def test_clean_does_deduplicate_values(self):
+        class WriterForm(forms.Form):
+            persons = forms.ModelMultipleChoiceField(queryset=Writer.objects.all())
+
+        person1 = Writer.objects.create(name="Person 1")
+        form = WriterForm(data={})
+        queryset = form.fields['persons'].clean([str(person1.pk)] * 50)
+        sql, params = queryset.query.sql_with_params()
+        self.assertEqual(len(params), 1)
+
 
 class ModelOneToOneFieldTests(TestCase):
     def test_modelform_onetoonefield(self):
@@ -2176,6 +2203,29 @@ class OtherModelFormTests(TestCase):
         with self.assertRaises(ValidationError):
             f.fields['status'].clean('z')
 
+    def test_prefetch_related_queryset(self):
+        """
+        ModelChoiceField should respect a prefetch_related() on its queryset.
+        """
+        blue = Colour.objects.create(name='blue')
+        red = Colour.objects.create(name='red')
+        multicolor_item = ColourfulItem.objects.create()
+        multicolor_item.colours.add(blue, red)
+        red_item = ColourfulItem.objects.create()
+        red_item.colours.add(red)
+
+        class ColorModelChoiceField(forms.ModelChoiceField):
+            def label_from_instance(self, obj):
+                return ', '.join(c.name for c in obj.colours.all())
+
+        field = ColorModelChoiceField(ColourfulItem.objects.prefetch_related('colours'))
+        with self.assertNumQueries(4):  # would be 5 if prefetch is ignored
+            self.assertEqual(tuple(field.choices), (
+                ('', '---------'),
+                (multicolor_item.pk, 'blue, red'),
+                (red_item.pk, 'red'),
+            ))
+
     def test_foreignkeys_which_use_to_field(self):
         apple = Inventory.objects.create(barcode=86, name='Apple')
         Inventory.objects.create(barcode=22, name='Pear')
@@ -2268,6 +2318,13 @@ class ModelFormCustomErrorTests(TestCase):
         self.assertHTMLEqual(
             str(form.errors['name1']),
             '<ul class="errorlist"><li>Model.clean() error messages.</li></ul>'
+        )
+        data = {'name1': 'FORBIDDEN_VALUE2', 'name2': 'ABC'}
+        form = CustomErrorMessageForm(data)
+        self.assertFalse(form.is_valid())
+        self.assertHTMLEqual(
+            str(form.errors['name1']),
+            '<ul class="errorlist"><li>Model.clean() error messages (simpler syntax).</li></ul>'
         )
         data = {'name1': 'GLOBAL_ERROR', 'name2': 'ABC'}
         form = CustomErrorMessageForm(data)

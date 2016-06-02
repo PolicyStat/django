@@ -1,5 +1,3 @@
-.. _ref-geos:
-
 ========
 GEOS API
 ========
@@ -67,11 +65,20 @@ created by passing in the X and Y coordinates into its constructor::
     >>> from django.contrib.gis.geos import Point
     >>> pnt = Point(5, 23)
 
-Finally, there are :func:`fromstr` and :func:`fromfile` factory methods, which
-return a :class:`GEOSGeometry` object from an input string or a file::
+All these constructors take the keyword argument ``srid``. For example::
 
-    >>> from django.contrib.gis.geos import fromstr, fromfile
-    >>> pnt = fromstr('POINT(5 23)')
+    >>> from django.contrib.gis.geos import GEOSGeometry, LineString, Point
+    >>> print(GEOSGeometry('POINT (0 0)', srid=4326))
+    SRID=4326;POINT (0.0000000000000000 0.0000000000000000)
+    >>> print(LineString((0, 0), (1, 1), srid=4326))
+    SRID=4326;LINESTRING (0.0000000000000000 0.0000000000000000, 1.0000000000000000 1.0000000000000000)
+    >>> print(Point(0, 0, srid=32140))
+    SRID=32140;POINT (0.0000000000000000 0.0000000000000000)
+
+Finally, there is the :func:`fromfile` factory method which returns a
+:class:`GEOSGeometry` object from a file::
+
+    >>> from django.contrib.gis.geos import fromfile
     >>> pnt = fromfile('/path/to/pnt.wkt')
     >>> pnt = fromfile(open('/path/to/pnt.wkt'))
 
@@ -140,7 +147,7 @@ Geometry Objects
 ``GEOSGeometry``
 ----------------
 
-.. class:: GEOSGeometry(geo_input[, srid=None])
+.. class:: GEOSGeometry(geo_input, srid=None)
 
   :param geo_input: Geometry input value (string or buffer)
   :param srid: spatial reference identifier
@@ -173,6 +180,17 @@ Properties
 .. attribute:: GEOSGeometry.coords
 
 Returns the coordinates of the geometry as a tuple.
+
+.. attribute:: GEOSGeometry.dims
+
+Returns the dimension of the geometry:
+
+* ``0`` for :class:`Point`\s and :class:`MultiPoint`\s
+* ``1`` for :class:`LineString`\s and :class:`MultiLineString`\s
+* ``2`` for :class:`Polygon`\s and :class:`MultiPolygon`\s
+* ``-1`` for empty :class:`GeometryCollection`\s
+* the maximum dimension of its elements for non-empty
+  :class:`GeometryCollection`\s
 
 .. attribute:: GEOSGeometry.empty
 
@@ -284,7 +302,9 @@ that are a part of this geometry.
 
 .. attribute:: GEOSGeometry.json
 
-Returns the GeoJSON representation of the geometry.
+Returns the GeoJSON representation of the geometry. Note that the result is not
+a complete GeoJSON structure but only the ``geometry`` key content of a
+GeoJSON structure. See also :doc:`/ref/contrib/gis/serializers`.
 
 .. note::
 
@@ -340,7 +360,8 @@ return a boolean.
 
 .. method:: GEOSGeometry.contains(other)
 
-Returns ``True`` if :meth:`GEOSGeometry.within` is ``False``.
+Returns ``True`` if :meth:`other.within(this) <GEOSGeometry.within>` returns
+``True``.
 
 .. method:: GEOSGeometry.crosses(other)
 
@@ -417,7 +438,7 @@ The normalized version takes the distance as a float between 0 (origin) and 1
 
 Reverse of :meth:`GEOSGeometry.project`.
 
-.. method:: GEOSGeometry:intersection(other)
+.. method:: GEOSGeometry.intersection(other)
 
 Returns a :class:`GEOSGeometry` representing the points shared by this
 geometry and other.
@@ -482,7 +503,8 @@ the geometry.
 .. attribute:: GEOSGeometry.envelope
 
 Returns a :class:`Polygon` that represents the bounding envelope of
-this geometry.
+this geometry. Note that it can also return a :class:`Point` if the input
+geometry is a point.
 
 .. attribute:: GEOSGeometry.point_on_surface
 
@@ -550,16 +572,8 @@ is returned instead.
 
 .. note::
 
-    Requires GDAL.
-
-.. note::
-
-   Prior to 1.3, this method would silently no-op if GDAL was not available.
-   Now, a :class:`~django.contrib.gis.geos.GEOSException` is raised as
-   application code relying on this behavior is in error. In addition,
-   use of this method when the SRID is ``None`` or less than 0 now also generates
-   a :class:`~django.contrib.gis.geos.GEOSException`.
-
+    Requires GDAL. Raises :class:`~django.contrib.gis.geos.GEOSException` if
+    GDAL is not available or if the geometry's SRID is ``None`` or less than 0.
 
 ``Point``
 ---------
@@ -801,13 +815,16 @@ Example::
     >>> from django.contrib.gis.geos import fromfile
     >>> g = fromfile('/home/bob/geom.wkt')
 
-.. function:: fromstr(string, [,srid=None])
+.. function:: fromstr(string, srid=None)
 
    :param string: string that contains spatial data
    :type string: string
    :param srid: spatial reference identifier
    :type srid: int
    :rtype: a :class:`GEOSGeometry` corresponding to the spatial data in the string
+
+``fromstr(string, srid)`` is equivalent to :class:`GEOSGeometry(string, srid)
+<GEOSGeometry>`.
 
 Example::
 
@@ -953,7 +970,7 @@ Returns the WKT of the given geometry. Example::
 
 
 .. rubric:: Footnotes
-.. [#fnogc] *See* `PostGIS EWKB, EWKT and Canonical Forms <http://postgis.refractions.net/docs/using_postgis_dbmanagement.html#EWKB_EWKT>`_, PostGIS documentation at Ch. 4.1.2.
+.. [#fnogc] *See* `PostGIS EWKB, EWKT and Canonical Forms <http://postgis.net/docs/using_postgis_dbmanagement.html#EWKB_EWKT>`_, PostGIS documentation at Ch. 4.1.2.
 .. [#fncascadedunion] For more information, read Paul Ramsey's blog post about `(Much) Faster Unions in PostGIS 1.4 <http://blog.cleverelephant.ca/2009/01/must-faster-unions-in-postgis-14.html>`_ and Martin Davis' blog post on `Fast polygon merging in JTS using Cascaded Union <http://lin-ear-th-inking.blogspot.com/2007/11/fast-polygon-merging-in-jts-using.html>`_.
 
 Settings

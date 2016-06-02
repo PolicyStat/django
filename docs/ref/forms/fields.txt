@@ -225,6 +225,9 @@ The ``help_text`` argument lets you specify descriptive text for this
 ``Field`` when the ``Field`` is rendered by one of the convenience ``Form``
 methods (e.g., ``as_ul()``).
 
+Like the model field's :attr:`~django.db.models.Field.help_text`, this value
+isn't HTML-escaped in automatically-generated forms.
+
 Here's a full example ``Form`` that implements ``help_text`` for two of its
 fields. We've specified ``auto_id=False`` to simplify the output::
 
@@ -293,7 +296,7 @@ See the :doc:`validators documentation </ref/validators>` for more information.
 
 .. attribute:: Field.localize
 
-The ``localize`` argument enables the localization of form data, input as well
+The ``localize`` argument enables the localization of form data input, as well
 as the rendered output.
 
 See the :ref:`format localization <format-localization>` documentation for
@@ -452,20 +455,20 @@ For each field, we describe the default widget used if you don't specify
     If no ``input_formats`` argument is provided, the default input formats are::
 
         ['%Y-%m-%d',      # '2006-10-25'
-        '%m/%d/%Y',       # '10/25/2006'
-        '%m/%d/%y']       # '10/25/06'
+         '%m/%d/%Y',      # '10/25/2006'
+         '%m/%d/%y']      # '10/25/06'
 
     Additionally, if you specify :setting:`USE_L10N=False<USE_L10N>` in your settings, the
     following will also be included in the default input formats::
 
         ['%b %d %Y',      # 'Oct 25 2006'
-        '%b %d, %Y',      # 'Oct 25, 2006'
-        '%d %b %Y',       # '25 Oct 2006'
-        '%d %b, %Y',      # '25 Oct, 2006'
-        '%B %d %Y',       # 'October 25 2006'
-        '%B %d, %Y',      # 'October 25, 2006'
-        '%d %B %Y',       # '25 October 2006'
-        '%d %B, %Y']      # '25 October, 2006'
+         '%b %d, %Y',     # 'Oct 25, 2006'
+         '%d %b %Y',      # '25 Oct 2006'
+         '%d %b, %Y',     # '25 Oct, 2006'
+         '%B %d %Y',      # 'October 25 2006'
+         '%B %d, %Y',     # 'October 25, 2006'
+         '%d %B %Y',      # '25 October 2006'
+         '%d %B, %Y']     # '25 October, 2006'
 
     See also :ref:`format localization <format-localization>`.
 
@@ -491,14 +494,14 @@ For each field, we describe the default widget used if you don't specify
     If no ``input_formats`` argument is provided, the default input formats are::
 
         ['%Y-%m-%d %H:%M:%S',    # '2006-10-25 14:30:59'
-        '%Y-%m-%d %H:%M',        # '2006-10-25 14:30'
-        '%Y-%m-%d',              # '2006-10-25'
-        '%m/%d/%Y %H:%M:%S',     # '10/25/2006 14:30:59'
-        '%m/%d/%Y %H:%M',        # '10/25/2006 14:30'
-        '%m/%d/%Y',              # '10/25/2006'
-        '%m/%d/%y %H:%M:%S',     # '10/25/06 14:30:59'
-        '%m/%d/%y %H:%M',        # '10/25/06 14:30'
-        '%m/%d/%y']              # '10/25/06'
+         '%Y-%m-%d %H:%M',       # '2006-10-25 14:30'
+         '%Y-%m-%d',             # '2006-10-25'
+         '%m/%d/%Y %H:%M:%S',    # '10/25/2006 14:30:59'
+         '%m/%d/%Y %H:%M',       # '10/25/2006 14:30'
+         '%m/%d/%Y',             # '10/25/2006'
+         '%m/%d/%y %H:%M:%S',    # '10/25/06 14:30:59'
+         '%m/%d/%y %H:%M',       # '10/25/06 14:30'
+         '%m/%d/%y']             # '10/25/06'
 
     See also :ref:`format localization <format-localization>`.
 
@@ -545,6 +548,23 @@ For each field, we describe the default widget used if you don't specify
     .. attribute:: decimal_places
 
         The maximum number of decimal places permitted.
+
+``DurationField``
+~~~~~~~~~~~~~~~~~
+
+.. versionadded:: 1.8
+
+.. class:: DurationField(**kwargs)
+
+    * Default widget: :class:`TextInput`
+    * Empty value: ``None``
+    * Normalizes to: A Python :class:`~python:datetime.timedelta`.
+    * Validates that the given value is a string which can be converted into a
+      ``timedelta``.
+    * Error message keys: ``required``, ``invalid``.
+
+    Accepts any format understood by
+    :func:`~django.utils.dateparse.parse_duration`.
 
 ``EmailField``
 ~~~~~~~~~~~~~~
@@ -642,7 +662,7 @@ For each field, we describe the default widget used if you don't specify
       ``False``, else :class:`TextInput`.
     * Empty value: ``None``
     * Normalizes to: A Python float.
-    * Validates that the given value is an float. Leading and trailing
+    * Validates that the given value is a float. Leading and trailing
       whitespace is allowed, as in Python's ``float()`` function.
     * Error message keys: ``required``, ``invalid``, ``max_value``,
       ``min_value``
@@ -673,13 +693,16 @@ For each field, we describe the default widget used if you don't specify
     When you use an ``ImageField`` on a form, you must also remember to
     :ref:`bind the file data to the form <binding-uploaded-files>`.
 
+    After the field has been cleaned and validated, the ``UploadedFile``
+    object will have an additional ``image`` attribute containing the Pillow
+    `Image`_ instance used to check if the file was a valid image. Also,
+    ``UploadedFile.content_type`` will be updated with the image's content type
+    if Pillow can determine it, otherwise it will be set to ``None``.
+
     .. versionchanged:: 1.8
 
-        After the field has been cleaned and validated, the ``UploadedFile``
-        object will have an additional ``image`` attribute containing the Pillow
-        `Image`_ instance used to check if the file was a valid image.
-        ``UploadedFile.content_type`` is also updated with the image's content
-        type as determined by Pillow.
+        The ``image`` and ``content_type`` attributes described in the last
+        paragraph were added.
 
 .. _Pillow: http://pillow.readthedocs.org/en/latest/
 .. _Image: https://pillow.readthedocs.org/en/latest/reference/Image.html
@@ -832,7 +855,7 @@ For each field, we describe the default widget used if you don't specify
     .. deprecated:: 1.8
 
         The optional argument ``error_message`` is also accepted for backwards
-        compatibility but will be removed in Django 2.0. The preferred way to
+        compatibility but will be removed in Django 1.10. The preferred way to
         provide an error message is to use the :attr:`~Field.error_messages`
         argument, passing a dictionary with ``'invalid'`` as a key and the error
         message as the value.
@@ -895,7 +918,7 @@ For each field, we describe the default widget used if you don't specify
     These are the same as ``CharField.max_length`` and ``CharField.min_length``.
 
 ``UUIDField``
--------------
+~~~~~~~~~~~~~
 
 .. versionadded:: 1.8
 
@@ -920,7 +943,7 @@ Slightly complex built-in ``Field`` classes
     * Default widget: :class:`TextInput`
     * Empty value: ``''`` (an empty string)
     * Normalizes to: A Unicode object.
-    * Validates that the given value against each of the fields specified
+    * Validates the given value against each of the fields specified
       as an argument to the ``ComboField``.
     * Error message keys: ``required``, ``invalid``
 
@@ -948,7 +971,7 @@ Slightly complex built-in ``Field`` classes
     * Default widget: :class:`TextInput`
     * Empty value: ``''`` (an empty string)
     * Normalizes to: the type returned by the ``compress`` method of the subclass.
-    * Validates that the given value against each of the fields specified
+    * Validates the given value against each of the fields specified
       as an argument to the ``MultiValueField``.
     * Error message keys: ``required``, ``invalid``, ``incomplete``
 

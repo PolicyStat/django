@@ -2,24 +2,25 @@
 from __future__ import unicode_literals
 
 import asyncore
-from email.mime.text import MIMEText
 import os
 import shutil
 import smtpd
 import sys
 import tempfile
 import threading
-from smtplib import SMTPException, SMTP
+from email.mime.text import MIMEText
+from smtplib import SMTP, SMTPException
 from ssl import SSLError
 
 from django.core import mail
-from django.core.mail import (EmailMessage, mail_admins, mail_managers,
-        EmailMultiAlternatives, send_mail, send_mass_mail)
-from django.core.mail.backends import console, dummy, locmem, filebased, smtp
+from django.core.mail import (
+    EmailMessage, EmailMultiAlternatives, mail_admins, mail_managers,
+    send_mail, send_mass_mail,
+)
+from django.core.mail.backends import console, dummy, filebased, locmem, smtp
 from django.core.mail.message import BadHeaderError
-from django.test import SimpleTestCase
-from django.test import override_settings
-from django.utils.encoding import force_text, force_bytes
+from django.test import SimpleTestCase, override_settings
+from django.utils.encoding import force_bytes, force_text
 from django.utils.six import PY3, StringIO, binary_type
 from django.utils.translation import ugettext_lazy
 
@@ -89,11 +90,36 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
         self.assertEqual(message['Cc'], 'cc@example.com, cc.other@example.com')
         self.assertEqual(email.recipients(), ['to@example.com', 'other@example.com', 'cc@example.com', 'cc.other@example.com', 'bcc@example.com'])
 
+    def test_reply_to(self):
+        email = EmailMessage(
+            'Subject', 'Content', 'from@example.com', ['to@example.com'],
+            reply_to=['reply_to@example.com'],
+        )
+        message = email.message()
+        self.assertEqual(message['Reply-To'], 'reply_to@example.com')
+
+        email = EmailMessage(
+            'Subject', 'Content', 'from@example.com', ['to@example.com'],
+            reply_to=['reply_to1@example.com', 'reply_to2@example.com']
+        )
+        message = email.message()
+        self.assertEqual(message['Reply-To'], 'reply_to1@example.com, reply_to2@example.com')
+
     def test_recipients_as_tuple(self):
         email = EmailMessage('Subject', 'Content', 'from@example.com', ('to@example.com', 'other@example.com'), cc=('cc@example.com', 'cc.other@example.com'), bcc=('bcc@example.com',))
         message = email.message()
         self.assertEqual(message['Cc'], 'cc@example.com, cc.other@example.com')
         self.assertEqual(email.recipients(), ['to@example.com', 'other@example.com', 'cc@example.com', 'cc.other@example.com', 'bcc@example.com'])
+
+    def test_recipients_as_string(self):
+        with self.assertRaisesMessage(TypeError, '"to" argument must be a list or tuple'):
+            EmailMessage(to='foo@example.com')
+        with self.assertRaisesMessage(TypeError, '"cc" argument must be a list or tuple'):
+            EmailMessage(cc='foo@example.com')
+        with self.assertRaisesMessage(TypeError, '"bcc" argument must be a list or tuple'):
+            EmailMessage(bcc='foo@example.com')
+        with self.assertRaisesMessage(TypeError, '"reply_to" argument must be a list or tuple'):
+            EmailMessage(reply_to='reply_to@example.com')
 
     def test_header_injection(self):
         email = EmailMessage('Subject\nInjection Test', 'Content', 'from@example.com', ['to@example.com'])
@@ -154,6 +180,17 @@ class MailTests(HeadersCheckMixin, SimpleTestCase):
         message = email.message()
         self.assertEqual(message['To'], 'list-subscriber@example.com, list-subscriber2@example.com')
         self.assertEqual(email.to, ['list-subscriber@example.com', 'list-subscriber2@example.com'])
+
+    def test_reply_to_header(self):
+        """
+        Specifying 'Reply-To' in headers should override reply_to.
+        """
+        email = EmailMessage(
+            'Subject', 'Content', 'bounce@example.com', ['to@example.com'],
+            reply_to=['foo@example.com'], headers={'Reply-To': 'override@example.com'},
+        )
+        message = email.message()
+        self.assertEqual(message['Reply-To'], 'override@example.com')
 
     def test_multiple_message_call(self):
         """
@@ -806,6 +843,9 @@ class FakeSMTPServer(smtpd.SMTPServer, threading.Thread):
 
     def __init__(self, *args, **kwargs):
         threading.Thread.__init__(self)
+        # New kwarg added in Python 3.5; default switching to False in 3.6.
+        if sys.version_info >= (3, 5):
+            kwargs['decode_data'] = True
         smtpd.SMTPServer.__init__(self, *args, **kwargs)
         self._sink = []
         self.active = False
@@ -850,12 +890,11 @@ class FakeSMTPServer(smtpd.SMTPServer, threading.Thread):
             self.join()
 
 
-class SMTPBackendTests(BaseEmailBackendTests, SimpleTestCase):
-    email_backend = 'django.core.mail.backends.smtp.EmailBackend'
+class SMTPBackendTestsBase(SimpleTestCase):
 
     @classmethod
     def setUpClass(cls):
-        super(SMTPBackendTests, cls).setUpClass()
+        super(SMTPBackendTestsBase, cls).setUpClass()
         cls.server = FakeSMTPServer(('127.0.0.1', 0), None)
         cls._settings_override = override_settings(
             EMAIL_HOST="127.0.0.1",
@@ -867,7 +906,11 @@ class SMTPBackendTests(BaseEmailBackendTests, SimpleTestCase):
     def tearDownClass(cls):
         cls._settings_override.disable()
         cls.server.stop()
-        super(SMTPBackendTests, cls).tearDownClass()
+        super(SMTPBackendTestsBase, cls).tearDownClass()
+
+
+class SMTPBackendTests(BaseEmailBackendTests, SMTPBackendTestsBase):
+    email_backend = 'django.core.mail.backends.smtp.EmailBackend'
 
     def setUp(self):
         super(SMTPBackendTests, self).setUp()
@@ -929,19 +972,6 @@ class SMTPBackendTests(BaseEmailBackendTests, SimpleTestCase):
         opened = backend.open()
         backend.close()
         self.assertTrue(opened)
-
-    def test_server_stopped(self):
-        """
-        Test that closing the backend while the SMTP server is stopped doesn't
-        raise an exception.
-        """
-        backend = smtp.EmailBackend(username='', password='')
-        backend.open()
-        self.server.stop()
-        try:
-            backend.close()
-        except Exception as e:
-            self.fail("close() unexpectedly raised an exception: %s" % e)
 
     @override_settings(EMAIL_USE_TLS=True)
     def test_email_tls_use_settings(self):
@@ -1074,3 +1104,24 @@ class SMTPBackendTests(BaseEmailBackendTests, SimpleTestCase):
 
         finally:
             SMTP.send = send
+
+
+class SMTPBackendStoppedServerTest(SMTPBackendTestsBase):
+    """
+    This test requires a separate class, because it shuts down the
+    FakeSMTPServer started in setUpClass(). It cannot be restarted
+    ("RuntimeError: threads can only be started once").
+    """
+
+    def test_server_stopped(self):
+        """
+        Test that closing the backend while the SMTP server is stopped doesn't
+        raise an exception.
+        """
+        backend = smtp.EmailBackend(username='', password='')
+        backend.open()
+        self.server.stop()
+        try:
+            backend.close()
+        except Exception as e:
+            self.fail("close() unexpectedly raised an exception: %s" % e)

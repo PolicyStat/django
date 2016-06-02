@@ -1,13 +1,21 @@
 from __future__ import unicode_literals
 
-from datetime import datetime, date
+import sys
+from datetime import date, datetime
+from unittest import skipIf
 
 from django.test import TestCase, override_settings
 from django.test.utils import TZ_SUPPORT, requires_tz_support
+from django.utils import dateformat, translation
 from django.utils.dateformat import format
-from django.utils import dateformat
-from django.utils.timezone import utc, get_fixed_timezone, get_default_timezone, make_aware
-from django.utils import translation
+from django.utils.timezone import (
+    get_default_timezone, get_fixed_timezone, make_aware, utc,
+)
+
+try:
+    import pytz
+except ImportError:
+    pytz = None
 
 
 @override_settings(TIME_ZONE='Europe/Copenhagen')
@@ -27,6 +35,19 @@ class DateFormatTests(TestCase):
     def test_naive_datetime(self):
         dt = datetime(2009, 5, 16, 5, 30, 30)
         self.assertEqual(datetime.fromtimestamp(int(format(dt, 'U'))), dt)
+
+    @skipIf(sys.platform.startswith('win') and not pytz, "Test requires pytz on Windows")
+    def test_naive_ambiguous_datetime(self):
+        # dt is ambiguous in Europe/Copenhagen. LocalTimezone guesses the
+        # offset (and gets it wrong 50% of the time) while pytz refuses the
+        # temptation to guess. In any case, this shouldn't crash.
+        dt = datetime(2015, 10, 25, 2, 30, 0)
+
+        # Try all formatters that involve self.timezone.
+        self.assertEqual(format(dt, 'I'), '0' if pytz is None else '')
+        self.assertEqual(format(dt, 'O'), '+0100' if pytz is None else '')
+        self.assertEqual(format(dt, 'T'), 'CET' if pytz is None else '')
+        self.assertEqual(format(dt, 'Z'), '3600' if pytz is None else '')
 
     @requires_tz_support
     def test_datetime_with_local_tzinfo(self):

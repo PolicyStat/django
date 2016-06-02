@@ -5,15 +5,19 @@ import pickle
 from decimal import Decimal
 from operator import attrgetter
 
-from django.core.exceptions import FieldError
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Count, Max, Avg, Sum, StdDev, Variance, F, Q
+from django.core.exceptions import FieldError
+from django.db.models import (
+    Avg, Count, F, Max, Q, StdDev, Sum, Value, Variance,
+)
 from django.test import TestCase, skipUnlessDBFeature
 from django.test.utils import Approximate
 from django.utils import six
 
-from .models import (Author, Book, Publisher, Clues, Entries, HardbackBook,
-        ItemTag, WithManualPK, Alfa, Bravo, Charlie)
+from .models import (
+    Alfa, Author, Book, Bravo, Charlie, Clues, Entries, HardbackBook, ItemTag,
+    Publisher, SelfRefFK, WithManualPK,
+)
 
 
 class AggregationTests(TestCase):
@@ -490,9 +494,10 @@ class AggregationTests(TestCase):
 
         # Regression for #15709 - Ensure each group_by field only exists once
         # per query
-        qs = Book.objects.values('publisher').annotate(max_pages=Max('pages')).order_by()
-        grouping, gb_params = qs.query.get_compiler(qs.db).get_grouping([], [])
-        self.assertEqual(len(grouping), 1)
+        qstr = str(Book.objects.values('publisher').annotate(max_pages=Max('pages')).order_by().query)
+        # Check that there is just one GROUP BY clause (zero commas means at
+        # most one clause)
+        self.assertEqual(qstr[qstr.index('GROUP BY'):].count(', '), 0)
 
     def test_duplicate_alias(self):
         # Regression for #11256 - duplicating a default alias raises ValueError.
@@ -563,7 +568,7 @@ class AggregationTests(TestCase):
             lambda b: b.name
         )
 
-        # Regression for #10248 - Annotations work with DateQuerySets
+        # Regression for #10248 - Annotations work with dates()
         qs = Book.objects.annotate(num_authors=Count('authors')).filter(num_authors=2).dates('pubdate', 'day')
         self.assertQuerysetEqual(
             qs, [
@@ -924,14 +929,11 @@ class AggregationTests(TestCase):
 
         # There should only be one GROUP BY clause, for the `id` column.
         # `name` and `age` should not be grouped on.
-        grouping, gb_params = results.query.get_compiler(using='default').get_grouping([], [])
-        self.assertEqual(len(grouping), 1)
-        assert 'id' in grouping[0]
-        assert 'name' not in grouping[0]
-        assert 'age' not in grouping[0]
-
-        # The query group_by property should also only show the `id`.
-        self.assertEqual(results.query.group_by, [('aggregation_regress_author', 'id')])
+        _, _, group_by = results.query.get_compiler(using='default').pre_sql_setup()
+        self.assertEqual(len(group_by), 1)
+        self.assertIn('id', group_by[0][0])
+        self.assertNotIn('name', group_by[0][0])
+        self.assertNotIn('age', group_by[0][0])
 
         # Ensure that we get correct results.
         self.assertEqual(
@@ -953,14 +955,11 @@ class AggregationTests(TestCase):
     def test_aggregate_duplicate_columns_only(self):
         # Works with only() too.
         results = Author.objects.only('id', 'name').annotate(num_contacts=Count('book_contact_set'))
-        grouping, gb_params = results.query.get_compiler(using='default').get_grouping([], [])
+        _, _, grouping = results.query.get_compiler(using='default').pre_sql_setup()
         self.assertEqual(len(grouping), 1)
-        assert 'id' in grouping[0]
-        assert 'name' not in grouping[0]
-        assert 'age' not in grouping[0]
-
-        # The query group_by property should also only show the `id`.
-        self.assertEqual(results.query.group_by, [('aggregation_regress_author', 'id')])
+        self.assertIn('id', grouping[0][0])
+        self.assertNotIn('name', grouping[0][0])
+        self.assertNotIn('age', grouping[0][0])
 
         # Ensure that we get correct results.
         self.assertEqual(
@@ -983,14 +982,11 @@ class AggregationTests(TestCase):
         # And select_related()
         results = Book.objects.select_related('contact').annotate(
             num_authors=Count('authors'))
-        grouping, gb_params = results.query.get_compiler(using='default').get_grouping([], [])
+        _, _, grouping = results.query.get_compiler(using='default').pre_sql_setup()
         self.assertEqual(len(grouping), 1)
-        assert 'id' in grouping[0]
-        assert 'name' not in grouping[0]
-        assert 'contact' not in grouping[0]
-
-        # The query group_by property should also only show the `id`.
-        self.assertEqual(results.query.group_by, [('aggregation_regress_book', 'id')])
+        self.assertIn('id', grouping[0][0])
+        self.assertNotIn('name', grouping[0][0])
+        self.assertNotIn('contact', grouping[0][0])
 
         # Ensure that we get correct results.
         self.assertEqual(
@@ -1117,9 +1113,9 @@ class AggregationTests(TestCase):
         in group by.
         """
         qs = Book.objects.annotate(
-            acount=Count('authors')
+            account=Count('authors')
         ).filter(
-            acount=F('publisher__num_awards')
+            account=F('publisher__num_awards')
         )
         self.assertQuerysetEqual(
             qs, ['Sams Teach Yourself Django in 24 Hours'],
@@ -1134,6 +1130,14 @@ class AggregationTests(TestCase):
             'select__sum': 10,
             'select__avg': Approximate(1.666, places=2),
         })
+
+    def test_annotate_distinct_aggregate(self):
+        # There are three books with rating of 4.0 and two of the books have
+        # the same price. Hence, the distinct removes one rating of 4.0
+        # from the results.
+        vals1 = Book.objects.values('rating', 'price').distinct().aggregate(result=Sum('rating'))
+        vals2 = Book.objects.aggregate(result=Sum('rating') - Value(4.0))
+        self.assertEqual(vals1, vals2)
 
 
 class JoinPromotionTests(TestCase):
@@ -1168,3 +1172,15 @@ class JoinPromotionTests(TestCase):
     def test_non_nullable_fk_not_promoted(self):
         qs = Book.objects.annotate(Count('contact__name'))
         self.assertIn(' INNER JOIN ', str(qs.query))
+
+
+class SelfReferentialFKTests(TestCase):
+    def test_ticket_24748(self):
+        t1 = SelfRefFK.objects.create(name='t1')
+        SelfRefFK.objects.create(name='t2', parent=t1)
+        SelfRefFK.objects.create(name='t3', parent=t1)
+        self.assertQuerysetEqual(
+            SelfRefFK.objects.annotate(num_children=Count('children')).order_by('name'),
+            [('t1', 2), ('t2', 0), ('t3', 0)],
+            lambda x: (x.name, x.num_children)
+        )

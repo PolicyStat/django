@@ -1,6 +1,6 @@
 from django.test import TestCase
 
-from .models.default_related_name import Author, Editor, Book
+from .models.default_related_name import Author, Book, Editor
 
 
 class DefaultRelatedNameTests(TestCase):
@@ -39,7 +39,7 @@ class DefaultRelatedNameTests(TestCase):
         except AttributeError:
             self.fail("Book should have a model_options_bookstores relation.")
 
-    def test_inheritance_with_overrided_default_related_name(self):
+    def test_inheritance_with_overridden_default_related_name(self):
         try:
             self.book.editor_stores
         except AttributeError:

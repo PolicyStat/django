@@ -6,25 +6,29 @@ from __future__ import unicode_literals
 
 import sys
 import unittest
-import warnings
-
-from django.contrib.auth.models import User
-from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured, ViewDoesNotExist
-from django.core.urlresolvers import (reverse, reverse_lazy, resolve, get_callable,
-    get_resolver, NoReverseMatch, Resolver404, ResolverMatch, RegexURLResolver,
-    RegexURLPattern)
-from django.http import HttpRequest, HttpResponseRedirect, HttpResponsePermanentRedirect
-from django.shortcuts import redirect
-from django.test import TestCase, override_settings
-from django.utils import six
-from django.utils.deprecation import RemovedInDjango20Warning
 
 from admin_scripts.tests import AdminScriptTestCase
 
-from . import urlconf_outer, middleware, views
-from .views import empty_view
+from django.conf import settings
+from django.conf.urls import include
+from django.contrib.auth.models import User
+from django.core.exceptions import ImproperlyConfigured, ViewDoesNotExist
+from django.core.urlresolvers import (
+    NoReverseMatch, RegexURLPattern, RegexURLResolver, Resolver404,
+    ResolverMatch, get_callable, get_resolver, resolve, reverse, reverse_lazy,
+)
+from django.http import (
+    HttpRequest, HttpResponsePermanentRedirect, HttpResponseRedirect,
+)
+from django.shortcuts import redirect
+from django.test import (
+    SimpleTestCase, TestCase, ignore_warnings, override_settings,
+)
+from django.utils import six
+from django.utils.deprecation import RemovedInDjango110Warning
 
+from . import middleware, urlconf_outer, views
+from .views import empty_view
 
 resolve_test_data = (
     # These entries are in the format: (path, url_name, app_name, namespace, view_name, func, args, kwargs)
@@ -90,6 +94,12 @@ test_data = (
     ('people_backref', '/people/nate-nate/', [], {'name': 'nate'}),
     ('optional', '/optional/fred/', [], {'name': 'fred'}),
     ('optional', '/optional/fred/', ['fred'], {}),
+    ('named_optional', '/optional/1/', [1], {}),
+    ('named_optional', '/optional/1/', [], {'arg1': 1}),
+    ('named_optional', '/optional/1/2/', [1, 2], {}),
+    ('named_optional', '/optional/1/2/', [], {'arg1': 1, 'arg2': 2}),
+    ('named_optional_terminated', '/optional/1/2/', [1, 2], {}),
+    ('named_optional_terminated', '/optional/1/2/', [], {'arg1': 1, 'arg2': 2}),
     ('hardcoded', '/hardcoded/', [], {}),
     ('hardcoded2', '/hardcoded/doc.pdf', [], {}),
     ('people3', '/people/il/adrian/', [], {'state': 'il', 'name': 'adrian'}),
@@ -138,6 +148,17 @@ test_data = (
     ('part2', '/prefix/xx/part2/one/', [], {'value': 'one', 'prefix': 'xx'}),
     ('part2', '/prefix/xx/part2/', [], {'prefix': 'xx'}),
 
+    # Tests for nested groups. Nested capturing groups will only work if you
+    # *only* supply the correct outer group.
+    ('nested-noncapture', '/nested/noncapture/opt', [], {'p': 'opt'}),
+    ('nested-capture', '/nested/capture/opt/', ['opt/'], {}),
+    ('nested-capture', NoReverseMatch, [], {'p': 'opt'}),
+    ('nested-mixedcapture', '/nested/capture/mixed/opt', ['opt'], {}),
+    ('nested-mixedcapture', NoReverseMatch, [], {'p': 'opt'}),
+    ('nested-namedcapture', '/nested/capture/named/opt/', [], {'outer': 'opt/'}),
+    ('nested-namedcapture', NoReverseMatch, [], {'outer': 'opt/', 'inner': 'opt'}),
+    ('nested-namedcapture', NoReverseMatch, [], {'inner': 'opt'}),
+
     # Regression for #9038
     # These views are resolved by method name. Each method is deployed twice -
     # once with an explicit argument, and once using the default value on
@@ -177,16 +198,15 @@ class NoURLPatternsTests(TestCase):
 @override_settings(ROOT_URLCONF='urlpatterns_reverse.urls')
 class URLPatternReverse(TestCase):
 
+    @ignore_warnings(category=RemovedInDjango110Warning)
     def test_urlpattern_reverse(self):
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RemovedInDjango20Warning)
-            for name, expected, args, kwargs in test_data:
-                try:
-                    got = reverse(name, args=args, kwargs=kwargs)
-                except NoReverseMatch:
-                    self.assertEqual(expected, NoReverseMatch)
-                else:
-                    self.assertEqual(got, expected)
+        for name, expected, args, kwargs in test_data:
+            try:
+                got = reverse(name, args=args, kwargs=kwargs)
+            except NoReverseMatch:
+                self.assertEqual(expected, NoReverseMatch)
+            else:
+                self.assertEqual(got, expected)
 
     def test_reverse_none(self):
         # Reversing None should raise an error, not return the last un-named view.
@@ -320,6 +340,17 @@ class ReverseLazyTest(TestCase):
         response = self.client.get('/login_required_view/')
         self.assertEqual(response.status_code, 200)
 
+    def test_inserting_reverse_lazy_into_string(self):
+        self.assertEqual(
+            'Some URL: %s' % reverse_lazy('some-login-page'),
+            'Some URL: /login/'
+        )
+        if six.PY2:
+            self.assertEqual(
+                b'Some URL: %s' % reverse_lazy('some-login-page'),
+                'Some URL: /login/'
+            )
+
 
 class ReverseLazySettingsTest(AdminScriptTestCase):
     """
@@ -385,12 +416,11 @@ class ReverseShortcutTests(TestCase):
         redirect("urlpatterns_reverse.nonimported_module.view")
         self.assertNotIn("urlpatterns_reverse.nonimported_module", sys.modules)
 
+    @ignore_warnings(category=RemovedInDjango110Warning)
     def test_reverse_by_path_nested(self):
         # Views that are added to urlpatterns using include() should be
-        # reversible by doted path.
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RemovedInDjango20Warning)
-            self.assertEqual(reverse('urlpatterns_reverse.views.nested_view'), '/includes/nested_path/')
+        # reversible by dotted path.
+        self.assertEqual(reverse('urlpatterns_reverse.views.nested_view'), '/includes/nested_path/')
 
     def test_redirect_view_object(self):
         from .views import absolute_kwargs_view
@@ -628,7 +658,7 @@ class ErrorHandlerResolutionTests(TestCase):
         self.assertEqual(self.resolver.resolve_error_handler(404), handler)
         self.assertEqual(self.resolver.resolve_error_handler(500), handler)
 
-    def test_callable_handers(self):
+    def test_callable_handlers(self):
         handler = (empty_view, {})
         self.assertEqual(self.callable_resolver.resolve_error_handler(400), handler)
         self.assertEqual(self.callable_resolver.resolve_error_handler(404), handler)
@@ -739,3 +769,10 @@ class ViewLoadingTests(TestCase):
         # swallow it.
         self.assertRaises(AttributeError, get_callable,
                           'urlpatterns_reverse.views_broken.i_am_broken')
+
+
+class IncludeTests(SimpleTestCase):
+    def test_include_app_name_but_no_namespace(self):
+        msg = "Must specify a namespace if specifying app_name."
+        with self.assertRaisesMessage(ValueError, msg):
+            include('urls', app_name='bar')

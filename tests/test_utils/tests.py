@@ -4,16 +4,21 @@ from __future__ import unicode_literals
 import unittest
 
 from django.conf.urls import url
+from django.contrib.staticfiles.finders import get_finder, get_finders
+from django.contrib.staticfiles.storage import staticfiles_storage
 from django.core.files.storage import default_storage
 from django.core.urlresolvers import NoReverseMatch, reverse
-from django.db import connection
+from django.db import connection, router
 from django.forms import EmailField, IntegerField
 from django.http import HttpResponse
 from django.template.loader import render_to_string
-from django.test import SimpleTestCase, TestCase, skipIfDBFeature, skipUnlessDBFeature
+from django.test import (
+    SimpleTestCase, TestCase, skipIfDBFeature, skipUnlessDBFeature,
+)
 from django.test.html import HTMLParseError, parse_html
 from django.test.utils import CaptureQueriesContext, override_settings
 from django.utils import six
+from django.utils._os import abspathu
 
 from .models import Car, Person, PossessedCar
 from .views import empty_response
@@ -747,6 +752,12 @@ class AssertRaisesMsgTest(SimpleTestCase):
             raise ValueError("[.*x+]y?")
         self.assertRaisesMessage(ValueError, "[.*x+]y?", func1)
 
+    def test_callable_obj_param(self):
+        # callable_obj was a documented kwarg in older version of Django.
+        def func1():
+            raise ValueError("[.*x+]y?")
+        self.assertRaisesMessage(ValueError, "[.*x+]y?", callable_obj=func1)
+
 
 class AssertFieldOutputTests(SimpleTestCase):
 
@@ -775,7 +786,7 @@ class SecondUrls:
 
 class OverrideSettingsTests(TestCase):
 
-    # #21518 -- If neither override_settings nor a settings_changed receiver
+    # #21518 -- If neither override_settings nor a setting_changed receiver
     # clears the URL cache between tests, then one of test_first or
     # test_second will fail.
 
@@ -842,3 +853,97 @@ class OverrideSettingsTests(TestCase):
         self.assertIsNone(default_storage.directory_permissions_mode)
         with self.settings(FILE_UPLOAD_DIRECTORY_PERMISSIONS=0o777):
             self.assertEqual(default_storage.directory_permissions_mode, 0o777)
+
+    def test_override_database_routers(self):
+        """
+        Overriding DATABASE_ROUTERS should update the master router.
+        """
+        test_routers = (object(),)
+        with self.settings(DATABASE_ROUTERS=test_routers):
+            self.assertSequenceEqual(router.routers, test_routers)
+
+    def test_override_static_url(self):
+        """
+        Overriding the STATIC_URL setting should be reflected in the
+        base_url attribute of
+        django.contrib.staticfiles.storage.staticfiles_storage.
+        """
+        with self.settings(STATIC_URL='/test/'):
+            self.assertEqual(staticfiles_storage.base_url, '/test/')
+
+    def test_override_static_root(self):
+        """
+        Overriding the STATIC_ROOT setting should be reflected in the
+        location attribute of
+        django.contrib.staticfiles.storage.staticfiles_storage.
+        """
+        with self.settings(STATIC_ROOT='/tmp/test'):
+            self.assertEqual(staticfiles_storage.location, abspathu('/tmp/test'))
+
+    def test_override_staticfiles_storage(self):
+        """
+        Overriding the STATICFILES_STORAGE setting should be reflected in
+        the value of django.contrib.staticfiles.storage.staticfiles_storage.
+        """
+        new_class = 'CachedStaticFilesStorage'
+        new_storage = 'django.contrib.staticfiles.storage.' + new_class
+        with self.settings(STATICFILES_STORAGE=new_storage):
+            self.assertEqual(staticfiles_storage.__class__.__name__, new_class)
+
+    def test_override_staticfiles_finders(self):
+        """
+        Overriding the STATICFILES_FINDERS setting should be reflected in
+        the return value of django.contrib.staticfiles.finders.get_finders.
+        """
+        current = get_finders()
+        self.assertGreater(len(list(current)), 1)
+        finders = ['django.contrib.staticfiles.finders.FileSystemFinder']
+        with self.settings(STATICFILES_FINDERS=finders):
+            self.assertEqual(len(list(get_finders())), len(finders))
+
+    def test_override_staticfiles_dirs(self):
+        """
+        Overriding the STATICFILES_DIRS setting should be reflected in
+        the locations attribute of the
+        django.contrib.staticfiles.finders.FileSystemFinder instance.
+        """
+        finder = get_finder('django.contrib.staticfiles.finders.FileSystemFinder')
+        test_path = '/tmp/test'
+        expected_location = ('', test_path)
+        self.assertNotIn(expected_location, finder.locations)
+        with self.settings(STATICFILES_DIRS=[test_path]):
+            finder = get_finder('django.contrib.staticfiles.finders.FileSystemFinder')
+            self.assertIn(expected_location, finder.locations)
+
+
+class TestBadSetUpTestData(TestCase):
+    """
+    An exception in setUpTestData() shouldn't leak a transaction which would
+    cascade across the rest of the test suite.
+    """
+    class MyException(Exception):
+        pass
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            super(TestBadSetUpTestData, cls).setUpClass()
+        except cls.MyException:
+            cls._in_atomic_block = connection.in_atomic_block
+
+    @classmethod
+    def tearDownClass(Cls):
+        # override to avoid a second cls._rollback_atomics() which would fail.
+        # Normal setUpClass() methods won't have exception handling so this
+        # method wouldn't typically be run.
+        pass
+
+    @classmethod
+    def setUpTestData(cls):
+        # Simulate a broken setUpTestData() method.
+        raise cls.MyException()
+
+    def test_failure_in_setUpTestData_should_rollback_transaction(self):
+        # setUpTestData() should call _rollback_atomics() so that the
+        # transaction doesn't leak.
+        self.assertFalse(self._in_atomic_block)

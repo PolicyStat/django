@@ -5,13 +5,17 @@ import datetime
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import models
-from django.forms import Form, ModelForm, FileField, ModelChoiceField, CharField
+from django.forms import (
+    CharField, FileField, Form, ModelChoiceField, ModelForm,
+)
 from django.forms.models import ModelFormMetaclass
 from django.test import TestCase
 from django.utils import six
 
-from ..models import (ChoiceModel, ChoiceOptionModel, ChoiceFieldModel,
-    FileModel, Group, BoundaryModel, Defaults, OptionalMultiChoiceModel)
+from ..models import (
+    BoundaryModel, ChoiceFieldModel, ChoiceModel, ChoiceOptionModel, Defaults,
+    FileModel, Group, OptionalMultiChoiceModel,
+)
 
 
 class ChoiceFieldForm(ModelForm):
@@ -56,16 +60,22 @@ class FileForm(Form):
     file1 = FileField()
 
 
-class TestTicket12510(TestCase):
-    ''' It is not necessary to generate choices for ModelChoiceField (regression test for #12510). '''
-    def setUp(self):
-        self.groups = [Group.objects.create(name=name) for name in 'abc']
+class TestModelChoiceField(TestCase):
 
     def test_choices_not_fetched_when_not_rendering(self):
+        """
+        Generating choices for ModelChoiceField should require 1 query (#12510).
+        """
+        self.groups = [Group.objects.create(name=name) for name in 'abc']
         # only one query is required to pull the model from DB
         with self.assertNumQueries(1):
             field = ModelChoiceField(Group.objects.order_by('-name'))
             self.assertEqual('a', field.clean(self.groups[0].pk).name)
+
+    def test_queryset_manager(self):
+        f = ModelChoiceField(ChoiceOptionModel.objects)
+        choice = ChoiceOptionModel.objects.create(name="choice 1")
+        self.assertEqual(list(f.choices), [('', '---------'), (choice.pk, str(choice))])
 
 
 class TestTicket14567(TestCase):
@@ -163,7 +173,7 @@ class FormsModelTestCase(TestCase):
         m.delete()
 
     def test_boundary_conditions(self):
-        # Boundary conditions on a PostitiveIntegerField #########################
+        # Boundary conditions on a PositiveIntegerField #########################
         class BoundaryForm(ModelForm):
             class Meta:
                 model = BoundaryModel
@@ -316,7 +326,7 @@ class EmptyLabelTestCase(TestCase):
             m = f.save()
             self.assertEqual(expected, getattr(m, key))
             self.assertEqual('No Preference',
-                             getattr(m, 'get_{0}_display'.format(key))())
+                             getattr(m, 'get_{}_display'.format(key))())
 
     def test_empty_field_integer(self):
         f = EmptyIntegerLabelChoiceForm()
@@ -330,7 +340,7 @@ class EmptyLabelTestCase(TestCase):
 
     def test_get_display_value_on_none(self):
         m = ChoiceModel.objects.create(name='test', choice='', choice_integer=None)
-        self.assertEqual(None, m.choice_integer)
+        self.assertIsNone(m.choice_integer)
         self.assertEqual('No Preference', m.get_choice_integer_display())
 
     def test_html_rendering_of_prepopulated_models(self):

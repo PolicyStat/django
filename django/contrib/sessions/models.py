@@ -6,6 +6,8 @@ from django.utils.translation import ugettext_lazy as _
 
 
 class SessionManager(models.Manager):
+    use_in_migrations = True
+
     def encode(self, session_dict):
         """
         Returns the given session dictionary serialized and encoded as a string.
@@ -56,6 +58,5 @@ class Session(models.Model):
     def get_decoded(self):
         return SessionStore().decode(self.session_data)
 
-
 # At bottom to avoid circular import
-from django.contrib.sessions.backends.db import SessionStore
+from django.contrib.sessions.backends.db import SessionStore  # isort:skip

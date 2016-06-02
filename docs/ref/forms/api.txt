@@ -256,8 +256,8 @@ precedence::
     <tr><th>Url:</th><td><input type="url" name="url" /></td></tr>
     <tr><th>Comment:</th><td><input type="text" name="comment" /></td></tr>
 
-Checking if form data has changed
----------------------------------
+Checking which form data has changed
+------------------------------------
 
 .. method:: Form.has_changed()
 
@@ -268,7 +268,7 @@ form data has been changed from the initial data.
     ...         'message': 'Hi there',
     ...         'sender': 'foo@example.com',
     ...         'cc_myself': True}
-    >>> f = ContactForm(initial=data)
+    >>> f = ContactForm(data, initial=data)
     >>> f.has_changed()
     False
 
@@ -282,6 +282,16 @@ so that the comparison can be done:
 from what was provided in :attr:`~Form.initial` or ``False`` otherwise. The
 result is computed by calling :meth:`Field.has_changed` for each field in the
 form.
+
+.. attribute:: Form.changed_data
+
+The ``changed_data`` attribute returns a list of the names of the fields whose
+values in the form's bound data (usually ``request.POST``) differ from what was
+provided in :attr:`~Form.initial`. It returns an empty list if no data differs.
+
+    >>> f = ContactForm(request.POST, initial=data)
+    >>> if f.has_changed():
+    ...     print("The following fields changed: %s" % ", ".join(f.changed_data))
 
 Accessing the fields from the form
 ----------------------------------
@@ -997,7 +1007,7 @@ fields are ordered first::
     <li>Cc myself: <input type="checkbox" name="cc_myself" /></li>
     <li>Priority: <input type="text" name="priority" /></li>
 
-It's possible to subclass multiple forms, treating forms as "mix-ins." In this
+It's possible to subclass multiple forms, treating forms as mixins. In this
 example, ``BeatleForm`` subclasses both ``PersonForm`` and ``InstrumentForm``
 (in that order), and its field list includes the fields from the parent
 classes::
@@ -1019,8 +1029,8 @@ classes::
 
 .. versionadded:: 1.7
 
-* It's possible to declaratively remove a ``Field`` inherited from a parent
-  class by setting the name to be ``None`` on the subclass. For example::
+It's possible to declaratively remove a ``Field`` inherited from a parent class
+by setting the name of the field to ``None`` on the subclass. For example::
 
     >>> from django import forms
 

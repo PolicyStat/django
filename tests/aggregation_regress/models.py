@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from django.contrib.contenttypes.fields import (
-    GenericForeignKey, GenericRelation
+    GenericForeignKey, GenericRelation,
 )
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
@@ -104,3 +104,8 @@ class Bravo(models.Model):
 class Charlie(models.Model):
     alfa = models.ForeignKey(Alfa, null=True)
     bravo = models.ForeignKey(Bravo, null=True)
+
+
+class SelfRefFK(models.Model):
+    name = models.CharField(max_length=50)
+    parent = models.ForeignKey('self', null=True, blank=True, related_name='children')

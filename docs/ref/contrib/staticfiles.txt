@@ -46,6 +46,12 @@ resolution works: the file that is first found in one of the specified
 locations will be used. If you're confused, the :djadmin:`findstatic` command
 can help show you which files are found.
 
+On subsequent ``collectstatic`` runs (if ``STATIC_ROOT`` isn't empty), files
+are copied only if they have a modified timestamp greater than the timestamp of
+the file in ``STATIC_ROOT``. Therefore if you remove an application from
+:setting:`INSTALLED_APPS`, it's a good idea to use the :djadminopt:`--clear`
+option in order to remove stale static files.
+
 Files are searched by using the :setting:`enabled finders
 <STATICFILES_FINDERS>`. The default is to look in all locations defined in
 :setting:`STATICFILES_DIRS` and in the ``'static'`` directory of apps
@@ -298,6 +304,12 @@ hashed names for all processed files in a file called ``staticfiles.json``.
 This happens once when you run the :djadmin:`collectstatic` management
 command.
 
+Due to the requirement of running :djadmin:`collectstatic`, this storage
+typically shouldn't be used when running tests as ``collectstatic`` isn't run
+as part of the normal test setup. During testing, ensure that the
+:setting:`STATICFILES_STORAGE` setting is set to something else like
+``'django.contrib.staticfiles.storage.StaticFilesStorage'`` (the default).
+
 .. method:: storage.ManifestStaticFilesStorage.file_hash(name, content=None)
 
 The method that is used when creating the hashed name of a file.
@@ -306,7 +318,7 @@ By default it calculates a MD5 hash from the content's chunks as
 mentioned above. Feel free to override this method to use your own
 hashing algorithm.
 
-.. _`far future Expires headers`: http://developer.yahoo.com/performance/rules.html#expires
+.. _`far future Expires headers`: https://developer.yahoo.com/performance/rules.html#expires
 .. _`@import`: http://www.w3.org/TR/CSS2/cascade.html#at-import
 .. _`url()`: http://www.w3.org/TR/CSS2/syndata.html#uri
 .. _`Cascading Style Sheets`: http://www.w3.org/Style/CSS/
@@ -359,6 +371,11 @@ slightly different call:
     {% static "images/hi.jpg" as myphoto %}
     <img src="{{ myphoto }}" alt="Hi!" />
 
+.. admonition:: Using Jinja2 templates?
+
+    See :class:`django.template.backends.jinja2.Jinja2` for information on
+    using the ``static`` tag with Jinja2.
+
 Finders Module
 ==============
 
@@ -381,7 +398,7 @@ There are a few other helpers outside of the
 :mod:`staticfiles <django.contrib.staticfiles>` app to work with static
 files:
 
-- The :func:`django.core.context_processors.static` context processor
+- The :func:`django.template.context_processors.static` context processor
   which adds :setting:`STATIC_URL` to every template context rendered
   with :class:`~django.template.RequestContext` contexts.
 

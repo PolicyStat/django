@@ -1,13 +1,13 @@
-from django.template.base import TemplateDoesNotExist
-from django.template.loader import get_template_from_string, make_origin
+from django.template.base import Template, TemplateDoesNotExist
 
 
 class Loader(object):
     is_usable = False
+    # Only used to raise a deprecation warning. Remove in Django 1.10.
+    _accepts_engine_in_init = True
 
-    def __init__(self, *args, **kwargs):
-        # XXX dropping arguments silently may not be the best idea.
-        pass
+    def __init__(self, engine):
+        self.engine = engine
 
     def __call__(self, template_name, template_dirs=None):
         return self.load_template(template_name, template_dirs)
@@ -15,12 +15,12 @@ class Loader(object):
     def load_template(self, template_name, template_dirs=None):
         source, display_name = self.load_template_source(
             template_name, template_dirs)
-        origin = make_origin(
+        origin = self.engine.make_origin(
             display_name, self.load_template_source,
             template_name, template_dirs)
 
         try:
-            template = get_template_from_string(source, origin, template_name)
+            template = Template(source, origin, template_name, self.engine)
         except TemplateDoesNotExist:
             # If compiling the template we found raises TemplateDoesNotExist,
             # back off to returning the source and display name for the

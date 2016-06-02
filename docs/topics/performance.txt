@@ -75,7 +75,7 @@ These can't report on the internals of your code, but can provide a useful
 insight into your site's overall performance, including aspects that can't be
 adequately measured from within Django environment. Examples include:
 
-* `Yahoo's Yslow <http://developer.yahoo.com/yslow/>`_
+* `Yahoo's Yslow <http://yslow.org/>`_
 * `Google PageSpeed <https://developers.google.com/speed/pagespeed/>`_
 
 There are also several paid-for services that perform a similar analysis,
@@ -174,11 +174,11 @@ final steps towards producing well-performing code, not a shortcut.
 It's common to have to call a class instances's method more than once. If
 that function is expensive, then doing so can be wasteful.
 
-Using the ``@cached_property`` decorator saves the value returned by a
-property; the next time the function is called on that instance, it will return
-the saved value rather than re-computing it. Note that this only works on
-methods that take ``self`` as their only argument and that it changes the
-method to a property.
+Using the :class:`~django.utils.functional.cached_property` decorator saves the
+value returned by a property; the next time the function is called on that
+instance, it will return the saved value rather than re-computing it. Note that
+this only works on methods that take ``self`` as their only argument and that
+it changes the method to a property.
 
 Certain Django components also have their own caching functionality; these are
 discussed below in the sections related to those components.
@@ -275,8 +275,8 @@ warning in :class:`~django.middleware.gzip.GZipMiddleware` for more information.
 Sessions
 --------
 
-:ref:`Using cached sessions <cached-sessions-backend>`
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Using cached sessions
+^^^^^^^^^^^^^^^^^^^^^
 
 :ref:`Using cached sessions <cached-sessions-backend>` may be a way to increase
 performance by eliminating the need to load session data from a slower storage

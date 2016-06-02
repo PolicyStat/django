@@ -2,7 +2,6 @@
 from __future__ import unicode_literals
 
 import datetime
-import warnings
 
 from django.forms import (
     CharField, DateField, EmailField, FileField, Form, GenericIPAddressField,
@@ -12,11 +11,13 @@ from django.forms import (
 )
 from django.forms.extras import SelectDateWidget
 from django.forms.utils import ErrorList
-from django.test import TestCase, override_settings
-from django.utils import six
-from django.utils import translation
+from django.test import TestCase, ignore_warnings, override_settings
+from django.utils import six, translation
 from django.utils.dates import MONTHS_AP
-from django.utils.encoding import force_text, smart_text, python_2_unicode_compatible
+from django.utils.deprecation import RemovedInDjango19Warning
+from django.utils.encoding import (
+    force_text, python_2_unicode_compatible, smart_text,
+)
 
 from .test_error_messages import AssertFormErrorsMixin
 
@@ -390,7 +391,7 @@ class FormsExtraTestCase(TestCase, AssertFormErrorsMixin):
         # MultiWidget and MultiValueField #############################################
         # MultiWidgets are widgets composed of other widgets. They are usually
         # combined with MultiValueFields - a field that is composed of other fields.
-        # MulitWidgets can themselved be composed of other MultiWidgets.
+        # MulitWidgets can themselves be composed of other MultiWidgets.
         # SplitDateTimeWidget is one example of a MultiWidget.
 
         class ComplexMultiWidget(MultiWidget):
@@ -483,10 +484,9 @@ class FormsExtraTestCase(TestCase, AssertFormErrorsMixin):
 
         self.assertEqual(f.cleaned_data['field1'], 'some text,JP,2007-04-25 06:24:00')
 
+    @ignore_warnings(category=RemovedInDjango19Warning)
     def test_ipaddress(self):
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            f = IPAddressField()
+        f = IPAddressField()
         self.assertFormErrors(['This field is required.'], f.clean, '')
         self.assertFormErrors(['This field is required.'], f.clean, None)
         self.assertEqual(f.clean(' 127.0.0.1'), '127.0.0.1')
@@ -495,9 +495,7 @@ class FormsExtraTestCase(TestCase, AssertFormErrorsMixin):
         self.assertFormErrors(['Enter a valid IPv4 address.'], f.clean, '1.2.3.4.5')
         self.assertFormErrors(['Enter a valid IPv4 address.'], f.clean, '256.125.1.5')
 
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            f = IPAddressField(required=False)
+        f = IPAddressField(required=False)
         self.assertEqual(f.clean(''), '')
         self.assertEqual(f.clean(None), '')
         self.assertEqual(f.clean(' 127.0.0.1'), '127.0.0.1')

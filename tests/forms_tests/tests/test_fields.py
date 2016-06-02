@@ -27,33 +27,33 @@ __init__(). For example, CharField has a max_length option.
 from __future__ import unicode_literals
 
 import datetime
+import os
 import pickle
 import re
-import os
 import uuid
 from decimal import Decimal
 from unittest import skipIf
-import warnings
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.forms import (
+    BooleanField, CharField, ChoiceField, ComboField, DateField, DateTimeField,
+    DecimalField, DurationField, EmailField, Field, FileField, FilePathField,
+    FloatField, Form, HiddenInput, ImageField, IntegerField,
+    MultipleChoiceField, NullBooleanField, NumberInput, PasswordInput,
+    RadioSelect, RegexField, SplitDateTimeField, Textarea, TextInput,
+    TimeField, TypedChoiceField, TypedMultipleChoiceField, URLField, UUIDField,
+    ValidationError, Widget, forms,
+)
+from django.test import SimpleTestCase, ignore_warnings
+from django.utils import formats, six, translation
+from django.utils._os import upath
+from django.utils.deprecation import RemovedInDjango110Warning
+from django.utils.duration import duration_string
 
 try:
     from PIL import Image
 except ImportError:
     Image = None
-
-from django.core.files.uploadedfile import SimpleUploadedFile
-from django.forms import (
-    BooleanField, CharField, ChoiceField, ComboField, DateField, DateTimeField,
-    DecimalField, EmailField, Field, FileField, FilePathField, FloatField,
-    Form, forms, HiddenInput, ImageField, IntegerField, MultipleChoiceField,
-    NullBooleanField, NumberInput, PasswordInput, RadioSelect, RegexField,
-    SplitDateTimeField, TextInput, Textarea, TimeField, TypedChoiceField,
-    TypedMultipleChoiceField, URLField, UUIDField, ValidationError, Widget,
-)
-from django.test import SimpleTestCase
-from django.utils import formats
-from django.utils import six
-from django.utils import translation
-from django.utils._os import upath
 
 
 def fix_os_paths(x):
@@ -172,7 +172,7 @@ class FieldsTests(SimpleTestCase):
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, '')
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, None)
         self.assertEqual(1, f.clean('1'))
-        self.assertEqual(True, isinstance(f.clean('1'), int))
+        self.assertIsInstance(f.clean('1'), int)
         self.assertEqual(23, f.clean('23'))
         self.assertRaisesMessage(ValidationError, "'Enter a whole number.'", f.clean, 'a')
         self.assertEqual(42, f.clean(42))
@@ -186,12 +186,12 @@ class FieldsTests(SimpleTestCase):
 
     def test_integerfield_2(self):
         f = IntegerField(required=False)
-        self.assertEqual(None, f.clean(''))
+        self.assertIsNone(f.clean(''))
         self.assertEqual('None', repr(f.clean('')))
-        self.assertEqual(None, f.clean(None))
+        self.assertIsNone(f.clean(None))
         self.assertEqual('None', repr(f.clean(None)))
         self.assertEqual(1, f.clean('1'))
-        self.assertEqual(True, isinstance(f.clean('1'), int))
+        self.assertIsInstance(f.clean('1'), int)
         self.assertEqual(23, f.clean('23'))
         self.assertRaisesMessage(ValidationError, "'Enter a whole number.'", f.clean, 'a')
         self.assertEqual(1, f.clean('1 '))
@@ -267,7 +267,7 @@ class FieldsTests(SimpleTestCase):
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, '')
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, None)
         self.assertEqual(1.0, f.clean('1'))
-        self.assertEqual(True, isinstance(f.clean('1'), float))
+        self.assertIsInstance(f.clean('1'), float)
         self.assertEqual(23.0, f.clean('23'))
         self.assertEqual(3.1400000000000001, f.clean('3.14'))
         self.assertEqual(3.1400000000000001, f.clean(3.14))
@@ -285,8 +285,8 @@ class FieldsTests(SimpleTestCase):
 
     def test_floatfield_2(self):
         f = FloatField(required=False)
-        self.assertEqual(None, f.clean(''))
-        self.assertEqual(None, f.clean(None))
+        self.assertIsNone(f.clean(''))
+        self.assertIsNone(f.clean(None))
         self.assertEqual(1.0, f.clean('1'))
         self.assertEqual(f.max_value, None)
         self.assertEqual(f.min_value, None)
@@ -331,7 +331,7 @@ class FieldsTests(SimpleTestCase):
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, '')
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, None)
         self.assertEqual(f.clean('1'), Decimal("1"))
-        self.assertEqual(True, isinstance(f.clean('1'), Decimal))
+        self.assertIsInstance(f.clean('1'), Decimal)
         self.assertEqual(f.clean('23'), Decimal("23"))
         self.assertEqual(f.clean('3.14'), Decimal("3.14"))
         self.assertEqual(f.clean(3.14), Decimal("3.14"))
@@ -363,8 +363,8 @@ class FieldsTests(SimpleTestCase):
 
     def test_decimalfield_2(self):
         f = DecimalField(max_digits=4, decimal_places=2, required=False)
-        self.assertEqual(None, f.clean(''))
-        self.assertEqual(None, f.clean(None))
+        self.assertIsNone(f.clean(''))
+        self.assertIsNone(f.clean(None))
         self.assertEqual(f.clean('1'), Decimal("1"))
         self.assertEqual(f.max_digits, 4)
         self.assertEqual(f.decimal_places, 2)
@@ -460,9 +460,9 @@ class FieldsTests(SimpleTestCase):
 
     def test_datefield_2(self):
         f = DateField(required=False)
-        self.assertEqual(None, f.clean(None))
+        self.assertIsNone(f.clean(None))
         self.assertEqual('None', repr(f.clean(None)))
-        self.assertEqual(None, f.clean(''))
+        self.assertIsNone(f.clean(''))
         self.assertEqual('None', repr(f.clean('')))
 
     def test_datefield_3(self):
@@ -490,15 +490,14 @@ class FieldsTests(SimpleTestCase):
         f = DateField()
         self.assertRaisesMessage(ValidationError, "'Enter a valid date.'", f.clean, 'a\x00b')
 
+    @ignore_warnings(category=RemovedInDjango110Warning)  # for _has_changed
     def test_datefield_changed(self):
         format = '%d/%m/%Y'
         f = DateField(input_formats=[format])
         d = datetime.date(2007, 9, 17)
         self.assertFalse(f.has_changed(d, '17/09/2007'))
         # Test for deprecated behavior _has_changed
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            self.assertFalse(f._has_changed(d, '17/09/2007'))
+        self.assertFalse(f._has_changed(d, '17/09/2007'))
 
     def test_datefield_strptime(self):
         """Test that field.strptime doesn't raise an UnicodeEncodeError (#16123)"""
@@ -582,9 +581,9 @@ class FieldsTests(SimpleTestCase):
 
     def test_datetimefield_3(self):
         f = DateTimeField(required=False)
-        self.assertEqual(None, f.clean(None))
+        self.assertIsNone(f.clean(None))
         self.assertEqual('None', repr(f.clean(None)))
-        self.assertEqual(None, f.clean(''))
+        self.assertIsNone(f.clean(''))
         self.assertEqual('None', repr(f.clean('')))
 
     def test_datetimefield_4(self):
@@ -608,6 +607,41 @@ class FieldsTests(SimpleTestCase):
         f = DateTimeField(input_formats=[format])
         d = datetime.datetime(2006, 9, 17, 14, 30, 0)
         self.assertFalse(f.has_changed(d, '2006 09 17 2:30 PM'))
+
+    # DurationField ###########################################################
+
+    def test_durationfield_1(self):
+        f = DurationField()
+        self.assertEqual(datetime.timedelta(seconds=30), f.clean('30'))
+        self.assertEqual(
+            datetime.timedelta(minutes=15, seconds=30),
+            f.clean('15:30')
+        )
+        self.assertEqual(
+            datetime.timedelta(hours=1, minutes=15, seconds=30),
+            f.clean('1:15:30')
+        )
+        self.assertEqual(
+            datetime.timedelta(
+                days=1, hours=1, minutes=15, seconds=30, milliseconds=300),
+            f.clean('1 1:15:30.3')
+        )
+
+    def test_durationfield_2(self):
+        class DurationForm(Form):
+            duration = DurationField(initial=datetime.timedelta(hours=1))
+        f = DurationForm()
+        self.assertHTMLEqual(
+            '<input id="id_duration" type="text" name="duration" value="01:00:00">',
+            str(f['duration'])
+        )
+
+    def test_durationfield_prepare_value(self):
+        field = DurationField()
+        td = datetime.timedelta(minutes=15, seconds=30)
+        self.assertEqual(field.prepare_value(td), duration_string(td))
+        self.assertEqual(field.prepare_value('arbitrary'), 'arbitrary')
+        self.assertIsNone(field.prepare_value(None))
 
     # RegexField ##################################################################
 
@@ -635,11 +669,9 @@ class FieldsTests(SimpleTestCase):
         self.assertRaisesMessage(ValidationError, "'Enter a valid value.'", f.clean, ' 2A2')
         self.assertRaisesMessage(ValidationError, "'Enter a valid value.'", f.clean, '2A2 ')
 
+    @ignore_warnings(category=RemovedInDjango110Warning)  # error_message deprecation
     def test_regexfield_4(self):
-        # deprecated error_message argument; remove in Django 2.0
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            f = RegexField('^[0-9][0-9][0-9][0-9]$', error_message='Enter a four-digit number.')
+        f = RegexField('^[0-9][0-9][0-9][0-9]$', error_message='Enter a four-digit number.')
         self.assertEqual('1234', f.clean('1234'))
         self.assertRaisesMessage(ValidationError, "'Enter a four-digit number.'", f.clean, '123')
         self.assertRaisesMessage(ValidationError, "'Enter a four-digit number.'", f.clean, 'abcd')
@@ -756,6 +788,9 @@ class FieldsTests(SimpleTestCase):
         # with here)
         self.assertTrue(f.has_changed('resume.txt', {'filename': 'resume.txt', 'content': 'My resume'}))
 
+    def test_file_picklable(self):
+        self.assertIsInstance(pickle.loads(pickle.dumps(FileField())), FileField)
+
     # ImageField ##################################################################
 
     @skipIf(Image is None, "Pillow is required to test ImageField")
@@ -773,6 +808,30 @@ class FieldsTests(SimpleTestCase):
 
         self.assertEqual('PNG', uploaded_file.image.format)
         self.assertEqual('image/png', uploaded_file.content_type)
+
+    @skipIf(Image is None, "Pillow is required to test ImageField")
+    def test_imagefield_annotate_with_bitmap_image_after_clean(self):
+        """
+        This also tests the situation when Pillow doesn't detect the MIME type
+        of the image (#24948).
+        """
+        from PIL.BmpImagePlugin import BmpImageFile
+        try:
+            Image.register_mime(BmpImageFile.format, None)
+            f = ImageField()
+            img_path = os.path.dirname(upath(__file__)) + '/filepath_test_files/1x1.bmp'
+            with open(img_path, 'rb') as img_file:
+                img_data = img_file.read()
+
+            img_file = SimpleUploadedFile('1x1.bmp', img_data)
+            img_file.content_type = 'text/plain'
+
+            uploaded_file = f.clean(img_file)
+
+            self.assertEqual('BMP', uploaded_file.image.format)
+            self.assertIsNone(uploaded_file.content_type)
+        finally:
+            Image.register_mime(BmpImageFile.format, 'image/bmp')
 
     # URLField ##################################################################
 
@@ -872,9 +931,7 @@ class FieldsTests(SimpleTestCase):
         """Test URLField correctly validates IPv6 (#18779)."""
         f = URLField()
         urls = (
-            'http://::/',
-            'http://6:21b4:92/',
-            'http://[12:34:3a53]/',
+            'http://[12:34::3a53]/',
             'http://[a34:9238::]:8080/',
         )
         for url in urls:
@@ -1004,7 +1061,7 @@ class FieldsTests(SimpleTestCase):
 
     def test_typedchoicefield_4(self):
         # Even more weirdness: if you have a valid choice but your coercion function
-        # can't coerce, yo'll still get a validation error. Don't do this!
+        # can't coerce, you'll still get a validation error. Don't do this!
         f = TypedChoiceField(choices=[('A', 'A'), ('B', 'B')], coerce=int)
         self.assertRaisesMessage(ValidationError, "'Select a valid choice. B is not one of the available choices.'", f.clean, 'B')
         # Required fields require values
@@ -1018,7 +1075,7 @@ class FieldsTests(SimpleTestCase):
 
     def test_typedchoicefield_6(self):
         f = TypedChoiceField(choices=[(1, "+1"), (-1, "-1")], coerce=int, required=False, empty_value=None)
-        self.assertEqual(None, f.clean(''))
+        self.assertIsNone(f.clean(''))
 
     def test_typedchoicefield_has_changed(self):
         # has_changed should not trigger required validation
@@ -1046,15 +1103,15 @@ class FieldsTests(SimpleTestCase):
 
     def test_nullbooleanfield_1(self):
         f = NullBooleanField()
-        self.assertEqual(None, f.clean(''))
+        self.assertIsNone(f.clean(''))
         self.assertEqual(True, f.clean(True))
         self.assertEqual(False, f.clean(False))
-        self.assertEqual(None, f.clean(None))
+        self.assertIsNone(f.clean(None))
         self.assertEqual(False, f.clean('0'))
         self.assertEqual(True, f.clean('1'))
-        self.assertEqual(None, f.clean('2'))
-        self.assertEqual(None, f.clean('3'))
-        self.assertEqual(None, f.clean('hello'))
+        self.assertIsNone(f.clean('2'))
+        self.assertIsNone(f.clean('3'))
+        self.assertIsNone(f.clean('hello'))
         self.assertEqual(True, f.clean('true'))
         self.assertEqual(False, f.clean('false'))
 
@@ -1071,7 +1128,7 @@ class FieldsTests(SimpleTestCase):
             hidden_nullbool1 = NullBooleanField(widget=HiddenInput, initial=True)
             hidden_nullbool2 = NullBooleanField(widget=HiddenInput, initial=False)
         f = HiddenNullBooleanForm({'hidden_nullbool1': 'True', 'hidden_nullbool2': 'False'})
-        self.assertEqual(None, f.full_clean())
+        self.assertIsNone(f.full_clean())
         self.assertEqual(True, f.cleaned_data['hidden_nullbool1'])
         self.assertEqual(False, f.cleaned_data['hidden_nullbool2'])
 
@@ -1085,10 +1142,10 @@ class FieldsTests(SimpleTestCase):
             nullbool1 = NullBooleanField(widget=RadioSelect(choices=NULLBOOL_CHOICES))
             nullbool2 = NullBooleanField(widget=RadioSelect(choices=NULLBOOL_CHOICES))
         f = MySQLNullBooleanForm({'nullbool0': '1', 'nullbool1': '0', 'nullbool2': ''})
-        self.assertEqual(None, f.full_clean())
+        self.assertIsNone(f.full_clean())
         self.assertEqual(True, f.cleaned_data['nullbool0'])
         self.assertEqual(False, f.cleaned_data['nullbool1'])
-        self.assertEqual(None, f.cleaned_data['nullbool2'])
+        self.assertIsNone(f.cleaned_data['nullbool2'])
 
     def test_nullbooleanfield_changed(self):
         f = NullBooleanField()
@@ -1191,7 +1248,7 @@ class FieldsTests(SimpleTestCase):
     def test_typedmultiplechoicefield_7(self):
         # If you want cleaning an empty value to return a different type, tell the field
         f = TypedMultipleChoiceField(choices=[(1, "+1"), (-1, "-1")], coerce=int, required=False, empty_value=None)
-        self.assertEqual(None, f.clean([]))
+        self.assertIsNone(f.clean([]))
 
     def test_typedmultiplechoicefield_has_changed(self):
         # has_changed should not trigger required validation
@@ -1317,6 +1374,7 @@ class FieldsTests(SimpleTestCase):
         f.choices.sort()
         expected = [
             ('/tests/forms_tests/tests/filepath_test_files/.dot-file', '.dot-file'),
+            ('/tests/forms_tests/tests/filepath_test_files/1x1.bmp', '1x1.bmp'),
             ('/tests/forms_tests/tests/filepath_test_files/1x1.png', '1x1.png'),
             ('/tests/forms_tests/tests/filepath_test_files/directory', 'directory'),
             ('/tests/forms_tests/tests/filepath_test_files/fake-image.jpg', 'fake-image.jpg'),
@@ -1334,7 +1392,7 @@ class FieldsTests(SimpleTestCase):
     def test_splitdatetimefield_1(self):
         from django.forms.widgets import SplitDateTimeWidget
         f = SplitDateTimeField()
-        assert isinstance(f.widget, SplitDateTimeWidget)
+        self.assertIsInstance(f.widget, SplitDateTimeWidget)
         self.assertEqual(datetime.datetime(2006, 1, 10, 7, 30), f.clean([datetime.date(2006, 1, 10), datetime.time(7, 30)]))
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, None)
         self.assertRaisesMessage(ValidationError, "'This field is required.'", f.clean, '')
@@ -1347,10 +1405,10 @@ class FieldsTests(SimpleTestCase):
         f = SplitDateTimeField(required=False)
         self.assertEqual(datetime.datetime(2006, 1, 10, 7, 30), f.clean([datetime.date(2006, 1, 10), datetime.time(7, 30)]))
         self.assertEqual(datetime.datetime(2006, 1, 10, 7, 30), f.clean(['2006-01-10', '07:30']))
-        self.assertEqual(None, f.clean(None))
-        self.assertEqual(None, f.clean(''))
-        self.assertEqual(None, f.clean(['']))
-        self.assertEqual(None, f.clean(['', '']))
+        self.assertIsNone(f.clean(None))
+        self.assertIsNone(f.clean(''))
+        self.assertIsNone(f.clean(['']))
+        self.assertIsNone(f.clean(['', '']))
         self.assertRaisesMessage(ValidationError, "'Enter a list of values.'", f.clean, 'hello')
         six.assertRaisesRegex(self, ValidationError, "'Enter a valid date\.', u?'Enter a valid time\.'", f.clean, ['hello', 'there'])
         self.assertRaisesMessage(ValidationError, "'Enter a valid time.'", f.clean, ['2006-01-10', 'there'])

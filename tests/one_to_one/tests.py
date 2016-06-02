@@ -1,10 +1,13 @@
 from __future__ import unicode_literals
 
-from django.db import transaction, IntegrityError, connection
+from django.db import IntegrityError, connection, transaction
 from django.test import TestCase
 
-from .models import (Bar, Favorites, HiddenPointer, ManualPrimaryKey, MultiModel,
-    Place, RelatedModel, Restaurant, School, Director, Target, UndergroundBar, Waiter)
+from .models import (
+    Bar, Director, Favorites, HiddenPointer, ManualPrimaryKey, MultiModel,
+    Place, Pointer, RelatedModel, Restaurant, School, Target, UndergroundBar,
+    Waiter,
+)
 
 
 class OneToOneTests(TestCase):
@@ -96,12 +99,15 @@ class OneToOneTests(TestCase):
         assert_filter_waiters(restaurant__place__exact=self.p1.pk)
         assert_filter_waiters(restaurant__place__exact=self.p1)
         assert_filter_waiters(restaurant__place__pk=self.p1.pk)
-        assert_filter_waiters(restaurant__exact=self.p1.pk)
-        assert_filter_waiters(restaurant__pk=self.p1.pk)
-        assert_filter_waiters(restaurant=self.p1.pk)
+        assert_filter_waiters(restaurant__exact=self.r1.pk)
+        assert_filter_waiters(restaurant__exact=self.r1)
+        assert_filter_waiters(restaurant__pk=self.r1.pk)
+        assert_filter_waiters(restaurant=self.r1.pk)
         assert_filter_waiters(restaurant=self.r1)
+        assert_filter_waiters(id__exact=w.pk)
+        assert_filter_waiters(pk=w.pk)
         # Delete the restaurant; the waiter should also be removed
-        r = Restaurant.objects.get(pk=self.p1.pk)
+        r = Restaurant.objects.get(pk=self.r1.pk)
         r.delete()
         self.assertEqual(Waiter.objects.count(), 0)
 
@@ -129,16 +135,9 @@ class OneToOneTests(TestCase):
         should raise an exception.
         """
         place = Place(name='User', address='London')
-        with self.assertRaisesMessage(ValueError,
-                            'Cannot assign "%r": "%s" instance isn\'t saved in the database.'
-                            % (place, Restaurant.place.field.rel.to._meta.object_name)):
+        msg = "save() prohibited to prevent data loss due to unsaved related object 'place'."
+        with self.assertRaisesMessage(ValueError, msg):
             Restaurant.objects.create(place=place, serves_hot_dogs=True, serves_pizza=False)
-        bar = UndergroundBar()
-        p = Place(name='User', address='London')
-        with self.assertRaisesMessage(ValueError,
-                            'Cannot assign "%r": "%s" instance isn\'t saved in the database.'
-                            % (bar, p._meta.object_name)):
-            p.undergroundbar = bar
 
     def test_reverse_relationship_cache_cascade(self):
         """
@@ -219,6 +218,11 @@ class OneToOneTests(TestCase):
         r = Restaurant(place=p)
         self.assertIs(r.place, p)
 
+        # Creation using keyword argument and unsaved related instance (#8070).
+        p = Place()
+        r = Restaurant(place=p)
+        self.assertTrue(r.place is p)
+
         # Creation using attname keyword argument and an id will cause the related
         # object to be fetched.
         p = Place.objects.get(name="Demon Dogs")
@@ -252,6 +256,11 @@ class OneToOneTests(TestCase):
             Target.objects.exclude(second_pointer=None),
             []
         )
+
+    def test_o2o_primary_key_delete(self):
+        t = Target.objects.create(name='name')
+        Pointer.objects.create(other=t)
+        Pointer.objects.filter(other__name='name').delete()
 
     def test_reverse_object_does_not_exist_cache(self):
         """
@@ -362,9 +371,15 @@ class OneToOneTests(TestCase):
         """
         p = Place()
         b = UndergroundBar.objects.create()
+
+        # Assigning a reverse relation on an unsaved object is allowed.
+        p.undergroundbar = b
+
+        # However saving the object is not allowed.
+        msg = "save() prohibited to prevent data loss due to unsaved related object 'place'."
         with self.assertNumQueries(0):
-            with self.assertRaises(ValueError):
-                p.undergroundbar = b
+            with self.assertRaisesMessage(ValueError, msg):
+                b.save()
 
     def test_nullable_o2o_delete(self):
         u = UndergroundBar.objects.create(place=self.p1)
@@ -380,7 +395,7 @@ class OneToOneTests(TestCase):
         be added to the related model.
         """
         self.assertFalse(
-            hasattr(Target, HiddenPointer._meta.get_field('target').related.get_accessor_name())
+            hasattr(Target, HiddenPointer._meta.get_field('target').rel.get_accessor_name())
         )
 
     def test_related_object(self):
@@ -438,3 +453,14 @@ class OneToOneTests(TestCase):
         # refs #21563
         self.assertFalse(hasattr(Director(), 'director'))
         self.assertFalse(hasattr(School(), 'school'))
+
+    def test_update_one_to_one_pk(self):
+        p1 = Place.objects.create()
+        p2 = Place.objects.create()
+        r1 = Restaurant.objects.create(place=p1)
+        r2 = Restaurant.objects.create(place=p2)
+        w = Waiter.objects.create(restaurant=r1)
+
+        Waiter.objects.update(restaurant=r2)
+        w.refresh_from_db()
+        self.assertEqual(w.restaurant, r2)

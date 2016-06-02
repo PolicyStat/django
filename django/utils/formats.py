@@ -1,17 +1,19 @@
-from __future__ import absolute_import  # Avoid importing `importlib` from this package.
+# Avoid importing `importlib` from this package.
+from __future__ import absolute_import
 
-import decimal
 import datetime
-from importlib import import_module
+import decimal
 import unicodedata
+from importlib import import_module
 
 from django.conf import settings
-from django.utils import dateformat, numberformat, datetime_safe
+from django.utils import dateformat, datetime_safe, numberformat, six
 from django.utils.encoding import force_str
 from django.utils.functional import lazy
 from django.utils.safestring import mark_safe
-from django.utils import six
-from django.utils.translation import get_language, to_locale, check_for_language
+from django.utils.translation import (
+    check_for_language, get_language, to_locale,
+)
 
 # format_cache is a mapping from (format_type, lang) to the format string.
 # By using the cache, it is possible to avoid running get_format_modules
@@ -29,6 +31,24 @@ ISO_INPUT_FORMATS = {
         '%Y-%m-%d'
     ),
 }
+
+
+FORMAT_SETTINGS = frozenset([
+    'DECIMAL_SEPARATOR',
+    'THOUSAND_SEPARATOR',
+    'NUMBER_GROUPING',
+    'FIRST_DAY_OF_WEEK',
+    'MONTH_DAY_FORMAT',
+    'TIME_FORMAT',
+    'DATE_FORMAT',
+    'DATETIME_FORMAT',
+    'SHORT_DATE_FORMAT',
+    'SHORT_DATETIME_FORMAT',
+    'YEAR_MONTH_FORMAT',
+    'DATE_INPUT_FORMATS',
+    'TIME_INPUT_FORMATS',
+    'DATETIME_INPUT_FORMATS',
+])
 
 
 def reset_format_cache():
@@ -101,9 +121,6 @@ def get_format(format_type, lang=None, use_l10n=None):
             cached = _format_cache[cache_key]
             if cached is not None:
                 return cached
-            else:
-                # Return the general setting by default
-                return getattr(settings, format_type)
         except KeyError:
             for module in get_format_modules(lang):
                 try:
@@ -118,6 +135,9 @@ def get_format(format_type, lang=None, use_l10n=None):
                 except AttributeError:
                     pass
             _format_cache[cache_key] = None
+    if format_type not in FORMAT_SETTINGS:
+        return format_type
+    # Return the general setting by default
     return getattr(settings, format_type)
 
 get_format_lazy = lazy(get_format, six.text_type, list, tuple)

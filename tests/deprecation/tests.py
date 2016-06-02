@@ -4,7 +4,8 @@ import os
 import unittest
 import warnings
 
-from django.test import SimpleTestCase, RequestFactory, override_settings
+from django.test import RequestFactory, SimpleTestCase, override_settings
+from django.test.utils import reset_warning_registry
 from django.utils import six, translation
 from django.utils.deprecation import RenameMethodsBase
 from django.utils.encoding import force_text
@@ -28,6 +29,7 @@ class RenameMethodsTests(SimpleTestCase):
         Ensure a warning is raised upon class definition to suggest renaming
         the faulty method.
         """
+        reset_warning_registry()
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter('always')
 
@@ -180,6 +182,7 @@ class DeprecatingRequestMergeDictTest(SimpleTestCase):
         Ensure the correct warning is raised when WSGIRequest.REQUEST is
         accessed.
         """
+        reset_warning_registry()
         with warnings.catch_warnings(record=True) as recorded:
             warnings.simplefilter('always')
             request = RequestFactory().get('/')
@@ -238,11 +241,12 @@ class DeprecatingSimpleTestCaseUrls(unittest.TestCase):
                 pass
 
         with warnings.catch_warnings(record=True) as recorded:
+            warnings.filterwarnings('always')
             suite = unittest.TestLoader().loadTestsFromTestCase(TempTestCase)
             with open(os.devnull, 'w') as devnull:
                 unittest.TextTestRunner(stream=devnull, verbosity=2).run(suite)
                 msg = force_text(recorded.pop().message)
                 self.assertEqual(msg,
                     "SimpleTestCase.urls is deprecated and will be removed in "
-                    "Django 2.0. Use @override_settings(ROOT_URLCONF=...) "
+                    "Django 1.10. Use @override_settings(ROOT_URLCONF=...) "
                     "in TempTestCase instead.")

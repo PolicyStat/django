@@ -1,10 +1,11 @@
-from __future__ import absolute_import  # Avoid importing `importlib` from this package.
+# Avoid importing `importlib` from this package.
+from __future__ import absolute_import
 
 import copy
-from importlib import import_module
 import os
 import sys
 import warnings
+from importlib import import_module
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import six
@@ -28,7 +29,7 @@ def import_string(dotted_path):
         return getattr(module, class_name)
     except AttributeError:
         msg = 'Module "%s" does not define a "%s" attribute/class' % (
-            dotted_path, class_name)
+            module_path, class_name)
         six.reraise(ImportError, ImportError(msg), sys.exc_info()[2])
 
 

@@ -12,7 +12,7 @@ from __future__ import unicode_literals
 import socket
 import sys
 from wsgiref import simple_server
-from wsgiref.util import FileWrapper   # NOQA: for backwards compatibility
+from wsgiref.util import FileWrapper  # NOQA: for backwards compatibility
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.handlers.wsgi import ISO_8859_1, UTF_8
@@ -60,6 +60,11 @@ def get_internal_wsgi_application():
                     sys.exc_info()[2])
 
 
+def is_broken_pipe_error():
+    exc_type, exc_value = sys.exc_info()[:2]
+    return issubclass(exc_type, socket.error) and exc_value.args[0] == 32
+
+
 class WSGIServer(simple_server.WSGIServer, object):
     """BaseHTTPServer that implements the Python WSGI protocol"""
 
@@ -75,6 +80,20 @@ class WSGIServer(simple_server.WSGIServer, object):
         super(WSGIServer, self).server_bind()
         self.setup_environ()
 
+    def handle_error(self, request, client_address):
+        if is_broken_pipe_error():
+            sys.stderr.write("- Broken pipe from %s\n" % (client_address,))
+        else:
+            super(WSGIServer, self).handle_error(request, client_address)
+
+
+# Inheriting from object required on Python 2.
+class ServerHandler(simple_server.ServerHandler, object):
+    def handle_error(self):
+        # Ignore broken pipe errors, otherwise pass on
+        if not is_broken_pipe_error():
+            super(ServerHandler, self).handle_error()
+
 
 class WSGIRequestHandler(simple_server.WSGIRequestHandler, object):
 
@@ -88,7 +107,7 @@ class WSGIRequestHandler(simple_server.WSGIRequestHandler, object):
 
     def log_message(self, format, *args):
 
-        msg = "[%s]" % self.log_date_time_string()
+        msg = "[%s] " % self.log_date_time_string()
         try:
             msg += "%s\n" % (format % args)
         except UnicodeDecodeError:
@@ -110,7 +129,7 @@ class WSGIRequestHandler(simple_server.WSGIRequestHandler, object):
         elif args[1][0] == '4':
             # 0x16 = Handshake, 0x03 = SSL 3.0 or TLS 1.x
             if args[0].startswith(str('\x16\x03')):
-                msg = ("You're accessing the developement server over HTTPS, "
+                msg = ("You're accessing the development server over HTTPS, "
                     "but it only supports HTTP.\n")
             msg = self.style.HTTP_BAD_REQUEST(msg)
         else:
@@ -120,6 +139,14 @@ class WSGIRequestHandler(simple_server.WSGIRequestHandler, object):
         sys.stderr.write(msg)
 
     def get_environ(self):
+        # Strip all headers with underscores in the name before constructing
+        # the WSGI environ. This prevents header-spoofing based on ambiguity
+        # between underscores and dashes both normalized to underscores in WSGI
+        # env vars. Nginx and Apache 2.4+ both do this as well.
+        for k, v in self.headers.items():
+            if '_' in k:
+                del self.headers[k]
+
         env = super(WSGIRequestHandler, self).get_environ()
 
         path = self.path
@@ -133,6 +160,26 @@ class WSGIRequestHandler(simple_server.WSGIRequestHandler, object):
         env['PATH_INFO'] = path.decode(ISO_8859_1) if six.PY3 else path
 
         return env
+
+    def handle(self):
+        """Copy of WSGIRequestHandler, but with different ServerHandler"""
+
+        self.raw_requestline = self.rfile.readline(65537)
+        if len(self.raw_requestline) > 65536:
+            self.requestline = ''
+            self.request_version = ''
+            self.command = ''
+            self.send_error(414)
+            return
+
+        if not self.parse_request():  # An error code has been sent, just exit
+            return
+
+        handler = ServerHandler(
+            self.rfile, self.wfile, self.get_stderr(), self.get_environ()
+        )
+        handler.request_handler = self      # backpointer for logging
+        handler.run(self.server.get_app())
 
 
 def run(addr, port, wsgi_handler, ipv6=False, threading=False):

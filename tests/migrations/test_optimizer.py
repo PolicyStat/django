@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
-from django.test import TestCase
+from django.db import migrations, models
 from django.db.migrations.optimizer import MigrationOptimizer
-from django.db import migrations
-from django.db import models
+from django.test import TestCase
+
+from .models import CustomModelBase, EmptyManager
 
 
 class OptimizerTests(TestCase):
@@ -20,42 +21,13 @@ class OptimizerTests(TestCase):
 
     def assertOptimizesTo(self, operations, expected, exact=None, less_than=None):
         result, iterations = self.optimize(operations)
+        result = [repr(f.deconstruct()) for f in result]
+        expected = [repr(f.deconstruct()) for f in expected]
         self.assertEqual(expected, result)
         if exact is not None and iterations != exact:
             raise self.failureException("Optimization did not take exactly %s iterations (it took %s)" % (exact, iterations))
         if less_than is not None and iterations >= less_than:
             raise self.failureException("Optimization did not take less than %s iterations (it took %s)" % (less_than, iterations))
-
-    def test_operation_equality(self):
-        """
-        Tests the equality operator on lists of operations.
-        If this is broken, then the optimizer will get stuck in an
-        infinite loop, so it's kind of important.
-        """
-        self.assertEqual(
-            [migrations.DeleteModel("Test")],
-            [migrations.DeleteModel("Test")],
-        )
-        self.assertEqual(
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=255))])],
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=255))])],
-        )
-        self.assertNotEqual(
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=255))])],
-            [migrations.CreateModel("Test", [("name", models.CharField(max_length=100))])],
-        )
-        self.assertEqual(
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-        )
-        self.assertNotEqual(
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-            [migrations.AddField("Test", "name", models.CharField(max_length=100))],
-        )
-        self.assertNotEqual(
-            [migrations.AddField("Test", "name", models.CharField(max_length=255))],
-            [migrations.AlterField("Test", "name", models.CharField(max_length=255))],
-        )
 
     def test_single(self):
         """
@@ -84,13 +56,26 @@ class OptimizerTests(TestCase):
         """
         CreateModel should absorb RenameModels.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
                 migrations.RenameModel("Foo", "Bar"),
             ],
             [
-                migrations.CreateModel("Bar", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    "Bar",
+                    [("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                )
             ],
         )
 
@@ -188,16 +173,29 @@ class OptimizerTests(TestCase):
         """
         AddField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
                 migrations.AddField("Foo", "age", models.IntegerField()),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.CharField(max_length=255)),
-                    ("age", models.IntegerField()),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.CharField(max_length=255)),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -243,15 +241,28 @@ class OptimizerTests(TestCase):
         """
         AlterField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
                 migrations.AlterField("Foo", "name", models.IntegerField()),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.IntegerField()),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.IntegerField()),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -259,15 +270,28 @@ class OptimizerTests(TestCase):
         """
         RenameField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [("name", models.CharField(max_length=255))]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[("name", models.CharField(max_length=255))],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
                 migrations.RenameField("Foo", "name", "title"),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("title", models.CharField(max_length=255)),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("title", models.CharField(max_length=255)),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -306,18 +330,31 @@ class OptimizerTests(TestCase):
         """
         RemoveField should optimize into CreateModel.
         """
+        managers = [('objects', EmptyManager())]
         self.assertOptimizesTo(
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.CharField(max_length=255)),
-                    ("age", models.IntegerField()),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.CharField(max_length=255)),
+                        ("age", models.IntegerField()),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
                 migrations.RemoveField("Foo", "age"),
             ],
             [
-                migrations.CreateModel("Foo", [
-                    ("name", models.CharField(max_length=255)),
-                ]),
+                migrations.CreateModel(
+                    name="Foo",
+                    fields=[
+                        ("name", models.CharField(max_length=255)),
+                    ],
+                    options={'verbose_name': 'Foo'},
+                    bases=(CustomModelBase),
+                    managers=managers,
+                ),
             ],
         )
 
@@ -331,7 +368,7 @@ class OptimizerTests(TestCase):
                 migrations.AlterField("Foo", "age", models.FloatField(default=2.4)),
             ],
             [
-                migrations.AddField("Foo", "age", models.FloatField(default=2.4)),
+                migrations.AddField("Foo", name="age", field=models.FloatField(default=2.4)),
             ],
         )
 

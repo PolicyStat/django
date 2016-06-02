@@ -1,12 +1,17 @@
 from __future__ import unicode_literals
 
 import os
+import sys
+import warnings
 
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
+from django.db import models
 from django.test import TestCase
 from django.test.utils import extend_sys_path
-from django.utils._os import upath
 from django.utils import six
+from django.utils._os import upath
+from django.utils.deprecation import RemovedInDjango19Warning
 
 
 class EggLoadingTest(TestCase):
@@ -75,3 +80,27 @@ class GetModelsTest(TestCase):
         self.assertNotIn(
             "NotInstalledModel",
             [m.__name__ for m in apps.get_models()])
+
+    def test_exception_raised_if_model_declared_outside_app(self):
+
+        class FakeModule(models.Model):
+            __name__ = str("models_that_do_not_live_in_an_app")
+
+        sys.modules['models_not_in_app'] = FakeModule
+
+        def declare_model_outside_app():
+            models.base.ModelBase.__new__(
+                models.base.ModelBase,
+                str('Outsider'),
+                (models.Model,),
+                {'__module__': 'models_not_in_app'})
+
+        msg = (
+            'Unable to detect the app label for model "Outsider." '
+            'Ensure that its module, "models_that_do_not_live_in_an_app", '
+            'is located inside an installed app.'
+        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=RemovedInDjango19Warning)
+            with self.assertRaisesMessage(ImproperlyConfigured, msg):
+                declare_model_outside_app()

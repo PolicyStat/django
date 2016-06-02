@@ -1,16 +1,16 @@
 import warnings
 
-from django.conf.urls import patterns, url, include
+from django.conf.urls import include, patterns, url
+from django.utils.deprecation import RemovedInDjango110Warning
 
 from .namespace_urls import URLObject
 from .views import view_class_instance
 
-
 testobj3 = URLObject('testapp', 'test-ns3')
 
-# test deprecated patterns() function. convert to list of urls() in Django 2.0
-with warnings.catch_warnings(record=True) as w:
-    warnings.filterwarnings('ignore', module='django.conf.urls')
+# test deprecated patterns() function. convert to list of urls() in Django 1.10
+with warnings.catch_warnings():
+    warnings.filterwarnings('ignore', category=RemovedInDjango110Warning)
 
     urlpatterns = patterns('urlpatterns_reverse.views',
         url(r'^normal/$', 'empty_view', name='inc-normal-view'),

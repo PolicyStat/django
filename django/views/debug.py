@@ -1,24 +1,27 @@
 from __future__ import unicode_literals
 
-import datetime
 import os
 import re
 import sys
 import types
 
 from django.conf import settings
-from django.core.urlresolvers import resolve, Resolver404
-from django.http import (HttpResponse, HttpResponseNotFound, HttpRequest,
-    build_request_repr)
-from django.template import Template, Context, TemplateDoesNotExist
+from django.core.urlresolvers import Resolver404, resolve
+from django.http import (
+    HttpRequest, HttpResponse, HttpResponseNotFound, build_request_repr,
+)
+from django.template import Context, Engine, TemplateDoesNotExist
 from django.template.defaultfilters import force_escape, pprint
-from django.template.loaders.utils import get_template_loaders
+from django.utils import lru_cache, six, timezone
 from django.utils.datastructures import MultiValueDict
-from django.utils.html import escape
 from django.utils.encoding import force_bytes, smart_text
+from django.utils.html import escape
 from django.utils.module_loading import import_string
-from django.utils import six
 from django.utils.translation import ugettext as _
+
+# Minimal Django templates engine to render the error templates
+# regardless of the project's TEMPLATES setting.
+DEBUG_ENGINE = Engine(debug=True)
 
 HIDDEN_SETTINGS = re.compile('API|TOKEN|KEY|SECRET|PASS|SIGNATURE')
 
@@ -58,7 +61,7 @@ def cleanse_setting(key, value):
             cleansed = CLEANSED_SUBSTITUTE
         else:
             if isinstance(value, dict):
-                cleansed = dict((k, cleanse_setting(k, v)) for k, v in value.items())
+                cleansed = {k: cleanse_setting(k, v) for k, v in value.items()}
             else:
                 cleansed = value
     except TypeError:
@@ -94,20 +97,16 @@ def technical_500_response(request, exc_type, exc_value, tb, status_code=500):
         html = reporter.get_traceback_html()
         return HttpResponse(html, status=status_code, content_type='text/html')
 
-# Cache for the default exception reporter filter instance.
-default_exception_reporter_filter = None
+
+@lru_cache.lru_cache()
+def get_default_exception_reporter_filter():
+    # Instantiate the default filter for the first time and cache it.
+    return import_string(settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()
 
 
 def get_exception_reporter_filter(request):
-    global default_exception_reporter_filter
-    if default_exception_reporter_filter is None:
-        # Load the default filter for the first time and cache it.
-        default_exception_reporter_filter = import_string(
-            settings.DEFAULT_EXCEPTION_REPORTER_FILTER)()
-    if request:
-        return getattr(request, 'exception_reporter_filter', default_exception_reporter_filter)
-    else:
-        return default_exception_reporter_filter
+    default_filter = get_default_exception_reporter_filter()
+    return getattr(request, 'exception_reporter_filter', default_filter)
 
 
 class ExceptionReporterFilter(object):
@@ -278,16 +277,31 @@ class ExceptionReporter(object):
 
     def get_traceback_data(self):
         """Return a dictionary containing traceback information."""
+        try:
+            default_template_engine = Engine.get_default()
+        except Exception:
+            # Since the debug view must never crash, catch all exceptions.
+            # If Django can't find a default template engine, get_default()
+            # raises ImproperlyConfigured. If some template engines fail to
+            # load, any exception may be raised.
+            default_template_engine = None
 
+        # TODO: add support for multiple template engines (#24120).
+        # TemplateDoesNotExist should carry all the information.
+        # Replaying the search process isn't a good design.
         if self.exc_type and issubclass(self.exc_type, TemplateDoesNotExist):
-            self.template_does_not_exist = True
-            self.loader_debug_info = []
-            # If Django fails in get_template_loaders, provide an empty list
-            # for the following loop to not fail.
-            try:
-                template_loaders = get_template_loaders()
-            except Exception:
+            if default_template_engine is None:
                 template_loaders = []
+            else:
+                self.template_does_not_exist = True
+                self.loader_debug_info = []
+                # If Django fails in get_template_loaders, provide an empty list
+                # for the following loop to not fail.
+                try:
+                    template_loaders = default_template_engine.template_loaders
+                except Exception:
+                    template_loaders = []
+
             for loader in template_loaders:
                 try:
                     source_list_func = loader.get_template_sources
@@ -304,8 +318,11 @@ class ExceptionReporter(object):
                     'loader': loader_name,
                     'templates': template_list,
                 })
-        if (settings.TEMPLATE_DEBUG and
-                hasattr(self.exc_value, 'django_template_source')):
+
+        # TODO: add support for multiple template engines (#24119).
+        if (default_template_engine is not None
+                and default_template_engine.debug
+                and hasattr(self.exc_value, 'django_template_source')):
             self.get_template_exception_info()
 
         frames = self.get_traceback_frames()
@@ -344,7 +361,7 @@ class ExceptionReporter(object):
             'settings': get_safe_settings(),
             'sys_executable': sys.executable,
             'sys_version_info': '%d.%d.%d' % sys.version_info[0:3],
-            'server_time': datetime.datetime.now(),
+            'server_time': timezone.now(),
             'django_version_info': get_version(),
             'sys_path': sys.path,
             'template_info': self.template_info,
@@ -362,13 +379,13 @@ class ExceptionReporter(object):
 
     def get_traceback_html(self):
         "Return HTML version of debug 500 HTTP error page."
-        t = Template(TECHNICAL_500_TEMPLATE, name='Technical 500 template')
+        t = DEBUG_ENGINE.from_string(TECHNICAL_500_TEMPLATE)
         c = Context(self.get_traceback_data(), use_l10n=False)
         return t.render(c)
 
     def get_traceback_text(self):
         "Return plain text version of debug 500 HTTP error page."
-        t = Template(TECHNICAL_500_TEXT_TEMPLATE, name='Technical 500 template')
+        t = DEBUG_ENGINE.from_string(TECHNICAL_500_TEXT_TEMPLATE)
         c = Context(self.get_traceback_data(), autoescape=False, use_l10n=False)
         return t.render(c)
 
@@ -545,7 +562,7 @@ def technical_404_response(request, exception):
             module = obj.__module__
             caller = '%s.%s' % (module, caller)
 
-    t = Template(TECHNICAL_404_TEMPLATE, name='Technical 404 template')
+    t = DEBUG_ENGINE.from_string(TECHNICAL_404_TEMPLATE)
     c = Context({
         'urlconf': urlconf,
         'root_urlconf': settings.ROOT_URLCONF,
@@ -561,8 +578,7 @@ def technical_404_response(request, exception):
 
 def default_urlconf(request):
     "Create an empty URLconf 404 error response."
-    t = Template(DEFAULT_URLCONF_TEMPLATE, name='Default URLconf template')
-
+    t = DEBUG_ENGINE.from_string(DEFAULT_URLCONF_TEMPLATE)
     c = Context({
         "title": _("Welcome to Django"),
         "heading": _("It worked!"),
@@ -694,7 +710,7 @@ TECHNICAL_500_TEMPLATE = ("""
     function switchPastebinFriendly(link) {
       s1 = "Switch to copy-and-paste view";
       s2 = "Switch back to interactive view";
-      link.innerHTML = link.innerHTML == s1 ? s2: s1;
+      link.innerHTML = link.innerHTML.trim() == s1 ? s2: s1;
       toggle('browserTraceback', 'pastebinTraceback');
       return false;
     }
@@ -781,7 +797,7 @@ TECHNICAL_500_TEMPLATE = ("""
         {% endfor %}
         </ul>
     {% else %}
-        <p>Django couldn't find any templates because your <code>TEMPLATE_LOADERS</code> setting is empty!</p>
+        <p>Django couldn't find any templates because your <code>'loaders'</code> option is empty!</p>
     {% endif %}
 </div>
 {% endif %}
@@ -900,7 +916,7 @@ Installed Middleware:
 {% for loader in loader_debug_info %}Using loader {{ loader.loader }}:
 {% for t in loader.templates %}{{ t.name }} ({{ t.status }})
 {% endfor %}{% endfor %}
-{% else %}Django couldn't find any templates because your TEMPLATE_LOADERS setting is empty!
+{% else %}Django couldn't find any templates because your 'loaders' option is empty!
 {% endif %}
 {% endif %}{% if template_info %}
 Template error:
@@ -1091,7 +1107,7 @@ Installed Middleware:
 {% for loader in loader_debug_info %}Using loader {{ loader.loader }}:
 {% for t in loader.templates %}{{ t.name }} ({{ t.status }})
 {% endfor %}{% endfor %}
-{% else %}Django couldn't find any templates because your TEMPLATE_LOADERS setting is empty!
+{% else %}Django couldn't find any templates because your 'loaders' option is empty!
 {% endif %}
 {% endif %}{% if template_info %}
 Template error:

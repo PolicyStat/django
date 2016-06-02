@@ -1,21 +1,24 @@
 # -*- encoding: utf-8 -*-
 from __future__ import unicode_literals
 
+import time
 from datetime import datetime, timedelta
 from io import BytesIO
 from itertools import chain
-import time
 
 from django.core.exceptions import SuspiciousOperation
-from django.core.handlers.wsgi import WSGIRequest, LimitedStream
-from django.http import (HttpRequest, HttpResponse, parse_cookie,
-    build_request_repr, UnreadablePostError, RawPostDataException)
-from django.test import SimpleTestCase, RequestFactory, override_settings
+from django.core.handlers.wsgi import LimitedStream, WSGIRequest
+from django.http import (
+    HttpRequest, HttpResponse, RawPostDataException, UnreadablePostError,
+    build_request_repr, parse_cookie,
+)
+from django.test import RequestFactory, SimpleTestCase, override_settings
 from django.test.client import FakePayload
-from django.test.utils import str_prefix
+from django.test.utils import freeze_time, str_prefix
 from django.utils import six
 from django.utils.encoding import force_str
 from django.utils.http import cookie_date, urlencode
+from django.utils.six.moves import http_cookies
 from django.utils.six.moves.urllib.parse import urlencode as original_urlencode
 from django.utils.timezone import utc
 
@@ -51,14 +54,25 @@ class RequestsTests(SimpleTestCase):
     def test_httprequest_repr(self):
         request = HttpRequest()
         request.path = '/somepath/'
+        request.method = 'GET'
         request.GET = {'get-key': 'get-value'}
         request.POST = {'post-key': 'post-value'}
         request.COOKIES = {'post-key': 'post-value'}
         request.META = {'post-key': 'post-value'}
-        self.assertEqual(repr(request), str_prefix("<HttpRequest\npath:/somepath/,\nGET:{%(_)s'get-key': %(_)s'get-value'},\nPOST:{%(_)s'post-key': %(_)s'post-value'},\nCOOKIES:{%(_)s'post-key': %(_)s'post-value'},\nMETA:{%(_)s'post-key': %(_)s'post-value'}>"))
-        self.assertEqual(build_request_repr(request), repr(request))
+        self.assertEqual(repr(request), str_prefix("<HttpRequest: GET '/somepath/'>"))
+        self.assertEqual(build_request_repr(request), str_prefix("<HttpRequest\npath:/somepath/,\nGET:{%(_)s'get-key': %(_)s'get-value'},\nPOST:{%(_)s'post-key': %(_)s'post-value'},\nCOOKIES:{%(_)s'post-key': %(_)s'post-value'},\nMETA:{%(_)s'post-key': %(_)s'post-value'}>"))
         self.assertEqual(build_request_repr(request, path_override='/otherpath/', GET_override={'a': 'b'}, POST_override={'c': 'd'}, COOKIES_override={'e': 'f'}, META_override={'g': 'h'}),
                          str_prefix("<HttpRequest\npath:/otherpath/,\nGET:{%(_)s'a': %(_)s'b'},\nPOST:{%(_)s'c': %(_)s'd'},\nCOOKIES:{%(_)s'e': %(_)s'f'},\nMETA:{%(_)s'g': %(_)s'h'}>"))
+
+    def test_httprequest_repr_invalid_method_and_path(self):
+        request = HttpRequest()
+        self.assertEqual(repr(request), str_prefix("<HttpRequest>"))
+        request = HttpRequest()
+        request.method = "GET"
+        self.assertEqual(repr(request), str_prefix("<HttpRequest>"))
+        request = HttpRequest()
+        request.path = ""
+        self.assertEqual(repr(request), str_prefix("<HttpRequest>"))
 
     def test_bad_httprequest_repr(self):
         """
@@ -74,7 +88,7 @@ class RequestsTests(SimpleTestCase):
         for attr in ['GET', 'POST', 'COOKIES', 'META']:
             request = HttpRequest()
             setattr(request, attr, {'bomb': bomb})
-            self.assertIn('%s:<could not parse>' % attr, repr(request))
+            self.assertIn('%s:<could not parse>' % attr, build_request_repr(request))
 
     def test_wsgirequest(self):
         request = WSGIRequest({'PATH_INFO': 'bogus', 'REQUEST_METHOD': 'bogus', 'wsgi.input': BytesIO(b'')})
@@ -125,13 +139,15 @@ class RequestsTests(SimpleTestCase):
             self.assertEqual(request.path, '/FORCED_PREFIX/somepath/')
 
     def test_wsgirequest_repr(self):
+        request = WSGIRequest({'REQUEST_METHOD': 'get', 'wsgi.input': BytesIO(b'')})
+        self.assertEqual(repr(request), str_prefix("<WSGIRequest: GET '/'>"))
         request = WSGIRequest({'PATH_INFO': '/somepath/', 'REQUEST_METHOD': 'get', 'wsgi.input': BytesIO(b'')})
         request.GET = {'get-key': 'get-value'}
         request.POST = {'post-key': 'post-value'}
         request.COOKIES = {'post-key': 'post-value'}
         request.META = {'post-key': 'post-value'}
-        self.assertEqual(repr(request), str_prefix("<WSGIRequest\npath:/somepath/,\nGET:{%(_)s'get-key': %(_)s'get-value'},\nPOST:{%(_)s'post-key': %(_)s'post-value'},\nCOOKIES:{%(_)s'post-key': %(_)s'post-value'},\nMETA:{%(_)s'post-key': %(_)s'post-value'}>"))
-        self.assertEqual(build_request_repr(request), repr(request))
+        self.assertEqual(repr(request), str_prefix("<WSGIRequest: GET '/somepath/'>"))
+        self.assertEqual(build_request_repr(request), str_prefix("<WSGIRequest\npath:/somepath/,\nGET:{%(_)s'get-key': %(_)s'get-value'},\nPOST:{%(_)s'post-key': %(_)s'post-value'},\nCOOKIES:{%(_)s'post-key': %(_)s'post-value'},\nMETA:{%(_)s'post-key': %(_)s'post-value'}>"))
         self.assertEqual(build_request_repr(request, path_override='/otherpath/', GET_override={'a': 'b'}, POST_override={'c': 'd'}, COOKIES_override={'e': 'f'}, META_override={'g': 'h'}),
                          str_prefix("<WSGIRequest\npath:/otherpath/,\nGET:{%(_)s'a': %(_)s'b'},\nPOST:{%(_)s'c': %(_)s'd'},\nCOOKIES:{%(_)s'e': %(_)s'f'},\nMETA:{%(_)s'g': %(_)s'h'}>"))
 
@@ -188,15 +204,21 @@ class RequestsTests(SimpleTestCase):
         response = HttpResponse()
         response.set_cookie('datetime', expires=datetime(2028, 1, 1, 4, 5, 6))
         datetime_cookie = response.cookies['datetime']
-        self.assertEqual(datetime_cookie['expires'], 'Sat, 01-Jan-2028 04:05:06 GMT')
+        self.assertIn(
+            datetime_cookie['expires'],
+            # Slight time dependency; refs #23450
+            ('Sat, 01-Jan-2028 04:05:06 GMT', 'Sat, 01-Jan-2028 04:05:07 GMT')
+        )
 
     def test_max_age_expiration(self):
         "Cookie will expire if max_age is provided"
         response = HttpResponse()
-        response.set_cookie('max_age', max_age=10)
+        set_cookie_time = time.time()
+        with freeze_time(set_cookie_time):
+            response.set_cookie('max_age', max_age=10)
         max_age_cookie = response.cookies['max_age']
         self.assertEqual(max_age_cookie['max-age'], 10)
-        self.assertEqual(max_age_cookie['expires'], cookie_date(time.time() + 10))
+        self.assertEqual(max_age_cookie['expires'], cookie_date(set_cookie_time + 10))
 
     def test_httponly_cookie(self):
         response = HttpResponse()
@@ -204,7 +226,7 @@ class RequestsTests(SimpleTestCase):
         example_cookie = response.cookies['example']
         # A compat cookie may be in use -- check that it has worked
         # both as an output string, and using the cookie attributes
-        self.assertIn('; httponly', str(example_cookie))
+        self.assertIn('; %s' % http_cookies.Morsel._reserved['httponly'], str(example_cookie))
         self.assertTrue(example_cookie['httponly'])
 
     def test_unicode_cookie(self):
@@ -334,7 +356,7 @@ class RequestsTests(SimpleTestCase):
         """
         Reading body after parsing multipart/form-data is not allowed
         """
-        # Because multipart is used for large amounts fo data i.e. file uploads,
+        # Because multipart is used for large amounts of data i.e. file uploads,
         # we don't want the data held in memory twice, and we don't want to
         # silence the error by setting body = '' either.
         payload = FakePayload("\r\n".join([
@@ -565,7 +587,7 @@ class HostValidationTests(SimpleTestCase):
             '12.34.56.78:443',
             '[2001:19f0:feee::dead:beef:cafe]',
             '[2001:19f0:feee::dead:beef:cafe]:8080',
-            'xn--4ca9at.com',  # Punnycode for öäü.com
+            'xn--4ca9at.com',  # Punycode for öäü.com
             'anything.multitenant.com',
             'multitenant.com',
             'insensitive.com',
@@ -635,7 +657,7 @@ class HostValidationTests(SimpleTestCase):
             '12.34.56.78:443',
             '[2001:19f0:feee::dead:beef:cafe]',
             '[2001:19f0:feee::dead:beef:cafe]:8080',
-            'xn--4ca9at.com',  # Punnycode for öäü.com
+            'xn--4ca9at.com',  # Punycode for öäü.com
         ]
 
         for host in legit_hosts:
@@ -681,7 +703,7 @@ class HostValidationTests(SimpleTestCase):
             'example.com',
             '12.34.56.78',
             '[2001:19f0:feee::dead:beef:cafe]',
-            'xn--4ca9at.com',  # Punnycode for öäü.com
+            'xn--4ca9at.com',  # Punycode for öäü.com
         ]:
             request = HttpRequest()
             request.META = {'HTTP_HOST': host}

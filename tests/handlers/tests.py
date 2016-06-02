@@ -3,12 +3,13 @@
 from __future__ import unicode_literals
 
 from django.core.handlers.wsgi import WSGIHandler, WSGIRequest
-from django.core.signals import request_started, request_finished
+from django.core.signals import request_finished, request_started
 from django.db import close_old_connections, connection
-from django.test import RequestFactory, TestCase, TransactionTestCase
-from django.test import override_settings
-from django.utils.encoding import force_str
+from django.test import (
+    RequestFactory, TestCase, TransactionTestCase, override_settings,
+)
 from django.utils import six
+from django.utils.encoding import force_str
 
 
 class HandlerTests(TestCase):
@@ -92,6 +93,19 @@ class HandlerTests(TestCase):
         # Python version because parsing invalid content became stricter in
         # latest versions.
         self.assertIsInstance(request.COOKIES, dict)
+
+    @override_settings(ROOT_URLCONF='handlers.urls')
+    def test_invalid_multipart_boundary(self):
+        """
+        Invalid boundary string should produce a "Bad Request" response, not a
+        server error (#23887).
+        """
+        environ = RequestFactory().post('/malformed_post/').environ
+        environ['CONTENT_TYPE'] = 'multipart/form-data; boundary=WRONG\x07'
+        handler = WSGIHandler()
+        response = handler(environ, lambda *a, **k: None)
+        # Expect "bad request" response
+        self.assertEqual(response.status_code, 400)
 
 
 @override_settings(ROOT_URLCONF='handlers.urls')

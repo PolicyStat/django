@@ -3,7 +3,6 @@ from __future__ import unicode_literals
 
 import copy
 import datetime
-import warnings
 
 from django.contrib.admin.tests import AdminSeleniumWebDriverTestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -15,13 +14,15 @@ from django.forms import (
     PasswordInput, RadioSelect, Select, SelectMultiple, SplitDateTimeWidget,
     Textarea, TextInput, TimeInput,
 )
-from django.forms.widgets import RadioFieldRenderer
-from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.safestring import mark_safe, SafeData
+from django.forms.widgets import (
+    ChoiceFieldRenderer, ChoiceInput, RadioFieldRenderer,
+)
+from django.test import TestCase, ignore_warnings, override_settings
 from django.utils import six
+from django.utils.deprecation import RemovedInDjango19Warning
+from django.utils.encoding import force_text, python_2_unicode_compatible
+from django.utils.safestring import SafeData, mark_safe
 from django.utils.translation import activate, deactivate, override
-from django.test import TestCase, override_settings
-from django.utils.encoding import python_2_unicode_compatible, force_text
 
 from ..models import Article
 
@@ -1022,6 +1023,23 @@ beatle J R Ringo False""")
         self.assertHTMLEqual(w.render('date', datetime.datetime(2007, 9, 17, 12, 51, 34)), '<input type="hidden" name="date_0" value="2007-09-17" /><input type="hidden" name="date_1" value="12:51:34" />')
         self.assertHTMLEqual(w.render('date', datetime.datetime(2007, 9, 17, 12, 51)), '<input type="hidden" name="date_0" value="2007-09-17" /><input type="hidden" name="date_1" value="12:51:00" />')
 
+    def test_sub_widget_html_safe(self):
+        widget = TextInput()
+        subwidget = next(widget.subwidgets('username', 'John Doe'))
+        self.assertTrue(hasattr(subwidget, '__html__'))
+        self.assertEqual(force_text(subwidget), subwidget.__html__())
+
+    def test_choice_input_html_safe(self):
+        widget = ChoiceInput('choices', 'CHOICE1', {}, ('CHOICE1', 'first choice'), 0)
+        self.assertTrue(hasattr(ChoiceInput, '__html__'))
+        self.assertEqual(force_text(widget), widget.__html__())
+
+    def test_choice_field_renderer_html_safe(self):
+        renderer = ChoiceFieldRenderer('choices', 'CHOICE1', {}, [('CHOICE1', 'first_choice')])
+        renderer.choice_input_class = lambda *args: args
+        self.assertTrue(hasattr(ChoiceFieldRenderer, '__html__'))
+        self.assertEqual(force_text(renderer), renderer.__html__())
+
 
 class NullBooleanSelectLazyForm(Form):
     """Form to test for lazy evaluation. Refs #17190"""
@@ -1112,27 +1130,24 @@ class WidgetTests(TestCase):
         # to make a copy of its sub-widgets when it is copied.
         self.assertEqual(w1.choices, [1, 2, 3])
 
+    @ignore_warnings(category=RemovedInDjango19Warning)
     def test_13390(self):
         # See ticket #13390
         class SplitDateForm(Form):
             field = DateTimeField(widget=SplitDateTimeWidget, required=False)
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RemovedInDjango19Warning)
-            form = SplitDateForm({'field': ''})
-            self.assertTrue(form.is_valid())
-            form = SplitDateForm({'field': ['', '']})
-            self.assertTrue(form.is_valid())
+        form = SplitDateForm({'field': ''})
+        self.assertTrue(form.is_valid())
+        form = SplitDateForm({'field': ['', '']})
+        self.assertTrue(form.is_valid())
 
         class SplitDateRequiredForm(Form):
             field = DateTimeField(widget=SplitDateTimeWidget, required=True)
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RemovedInDjango19Warning)
-            form = SplitDateRequiredForm({'field': ''})
-            self.assertFalse(form.is_valid())
-            form = SplitDateRequiredForm({'field': ['', '']})
-            self.assertFalse(form.is_valid())
+        form = SplitDateRequiredForm({'field': ''})
+        self.assertFalse(form.is_valid())
+        form = SplitDateRequiredForm({'field': ['', '']})
+        self.assertFalse(form.is_valid())
 
 
 @override_settings(ROOT_URLCONF='forms_tests.urls')

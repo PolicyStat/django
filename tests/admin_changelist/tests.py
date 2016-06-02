@@ -5,25 +5,28 @@ import datetime
 from django.contrib import admin
 from django.contrib.admin.options import IncorrectLookupParameters
 from django.contrib.admin.templatetags.admin_list import pagination
-from django.contrib.admin.views.main import ChangeList, SEARCH_VAR, ALL_VAR
 from django.contrib.admin.tests import AdminSeleniumWebDriverTestCase
+from django.contrib.admin.views.main import ALL_VAR, SEARCH_VAR, ChangeList
 from django.contrib.auth.models import User
 from django.core.urlresolvers import reverse
 from django.template import Context, Template
 from django.test import TestCase, override_settings
 from django.test.client import RequestFactory
-from django.utils import formats
-from django.utils import six
+from django.utils import formats, six
 
-from .admin import (ChildAdmin, QuartetAdmin, BandAdmin, ChordsBandAdmin,
-    GroupAdmin, ParentAdmin, DynamicListDisplayChildAdmin,
-    DynamicListDisplayLinksChildAdmin, CustomPaginationAdmin,
-    FilteredChildAdmin, CustomPaginator, site as custom_site,
-    SwallowAdmin, DynamicListFilterChildAdmin, InvitationAdmin,
-    DynamicSearchFieldsChildAdmin, NoListDisplayLinksParentAdmin)
-from .models import (Event, Child, Parent, Genre, Band, Musician, Group,
-    Quartet, Membership, ChordsMusician, ChordsBand, Invitation, Swallow,
-    UnorderedObject, OrderedObject, CustomIdUser)
+from .admin import (
+    BandAdmin, ChildAdmin, ChordsBandAdmin, CustomPaginationAdmin,
+    CustomPaginator, DynamicListDisplayChildAdmin,
+    DynamicListDisplayLinksChildAdmin, DynamicListFilterChildAdmin,
+    DynamicSearchFieldsChildAdmin, FilteredChildAdmin, GroupAdmin,
+    InvitationAdmin, NoListDisplayLinksParentAdmin, ParentAdmin, QuartetAdmin,
+    SwallowAdmin, site as custom_site,
+)
+from .models import (
+    Band, Child, ChordsBand, ChordsMusician, CustomIdUser, Event, Genre, Group,
+    Invitation, Membership, Musician, OrderedObject, Parent, Quartet, Swallow,
+    SwallowOneToOne, UnorderedObject,
+)
 
 
 @override_settings(ROOT_URLCONF="admin_changelist.urls")
@@ -365,7 +368,7 @@ class ChangeListTests(TestCase):
             username='super', email='super@localhost', password='secret')
         self.client.login(username='super', password='secret')
         event = Event.objects.create(date=datetime.date.today())
-        response = self.client.get('/admin/admin_changelist/event/')
+        response = self.client.get(reverse('admin:admin_changelist_event_changelist'))
         self.assertContains(response, formats.localize(event.date))
         self.assertNotContains(response, six.text_type(event.date))
 
@@ -475,8 +478,10 @@ class ChangeListTests(TestCase):
         Regression test for #17128
         (ChangeList failing under Python 2.5 after r16319)
         """
-        swallow = Swallow.objects.create(
-            origin='Africa', load='12.34', speed='22.2')
+        swallow = Swallow.objects.create(origin='Africa', load='12.34', speed='22.2')
+        swallow2 = Swallow.objects.create(origin='Africa', load='12.34', speed='22.2')
+        swallow_o2o = SwallowOneToOne.objects.create(swallow=swallow2)
+
         model_admin = SwallowAdmin(Swallow, admin.site)
         superuser = self._create_superuser('superuser')
         request = self._mocked_authenticated_request('/swallow/', superuser)
@@ -485,6 +490,9 @@ class ChangeListTests(TestCase):
         self.assertContains(response, six.text_type(swallow.origin))
         self.assertContains(response, six.text_type(swallow.load))
         self.assertContains(response, six.text_type(swallow.speed))
+        # Reverse one-to-one relations should work.
+        self.assertContains(response, '<td class="field-swallowonetoone">(None)</td>')
+        self.assertContains(response, '<td class="field-swallowonetoone">%s</td>' % swallow_o2o)
 
     def test_deterministic_order_for_unordered_model(self):
         """
@@ -674,11 +682,11 @@ class SeleniumFirefoxTests(AdminSeleniumWebDriverTestCase):
 
     def test_add_row_selection(self):
         """
-        Ensure that the status line for selected rows gets updated correcly (#22038)
+        Ensure that the status line for selected rows gets updated correctly (#22038)
         """
         self.admin_login(username='super', password='secret')
         self.selenium.get('%s%s' % (self.live_server_url,
-                                    '/admin/auth/user/'))
+                                    reverse('admin:auth_user_changelist')))
 
         form_id = '#changelist-form'
 

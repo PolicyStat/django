@@ -6,21 +6,23 @@ import json
 import os
 import pickle
 import unittest
+import uuid
 
 from django.core.exceptions import SuspiciousOperation
 from django.core.serializers.json import DjangoJSONEncoder
 from django.core.signals import request_finished
 from django.db import close_old_connections
-from django.http import (QueryDict, HttpResponse, HttpResponseRedirect,
-                         HttpResponsePermanentRedirect, HttpResponseNotAllowed,
-                         HttpResponseNotModified, StreamingHttpResponse,
-                         SimpleCookie, BadHeaderError, JsonResponse,
-                         parse_cookie)
+from django.http import (
+    BadHeaderError, HttpResponse, HttpResponseNotAllowed,
+    HttpResponseNotModified, HttpResponsePermanentRedirect,
+    HttpResponseRedirect, JsonResponse, QueryDict, SimpleCookie,
+    StreamingHttpResponse, parse_cookie,
+)
 from django.test import TestCase
-from django.utils.encoding import smart_str, force_text
-from django.utils.functional import lazy
-from django.utils._os import upath
 from django.utils import six
+from django.utils._os import upath
+from django.utils.encoding import force_text, smart_str
+from django.utils.functional import lazy
 
 lazystr = lazy(force_text, six.text_type)
 
@@ -305,6 +307,9 @@ class HttpResponseTests(unittest.TestCase):
         f = 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz a\xcc\x88'.encode('latin-1')
         f = f.decode('utf-8')
         h['Content-Disposition'] = 'attachment; filename="%s"' % f
+        # This one is triggering http://bugs.python.org/issue20747, that is Python
+        # will itself insert a newline in the header
+        h['Content-Disposition'] = 'attachment; filename="EdelRot_Blu\u0308te (3)-0.JPG"'
 
     def test_newlines_in_headers(self):
         # Bug #10188: Do not allow newlines in headers (CR or LF)
@@ -345,16 +350,8 @@ class HttpResponseTests(unittest.TestCase):
         # test odd inputs
         r = HttpResponse()
         r.content = ['1', '2', 3, '\u079e']
-        #'\xde\x9e' == unichr(1950).encode('utf-8')
+        # '\xde\x9e' == unichr(1950).encode('utf-8')
         self.assertEqual(r.content, b'123\xde\x9e')
-
-        # with Content-Encoding header
-        r = HttpResponse()
-        r['Content-Encoding'] = 'winning'
-        r.content = [b'abc', b'def']
-        self.assertEqual(r.content, b'abcdef')
-        self.assertRaises(TypeError if six.PY3 else UnicodeEncodeError,
-                          setattr, r, 'content', ['\u079e'])
 
         # .content can safely be accessed multiple times.
         r = HttpResponse(iter(['hello', 'world']))
@@ -484,6 +481,11 @@ class JsonResponseTests(TestCase):
         response = JsonResponse(['foo', 'bar'], safe=False)
         self.assertEqual(json.loads(response.content.decode()), ['foo', 'bar'])
 
+    def test_json_response_uuid(self):
+        u = uuid.uuid4()
+        response = JsonResponse(u, safe=False)
+        self.assertEqual(json.loads(response.content.decode()), str(u))
+
     def test_json_response_custom_encoder(self):
         class CustomDjangoJSONEncoder(DjangoJSONEncoder):
             def encode(self, o):
@@ -511,6 +513,14 @@ class StreamingHttpResponseTests(TestCase):
         r = StreamingHttpResponse(['abc', 'def'])
         self.assertEqual(list(r), [b'abc', b'def'])
         self.assertEqual(list(r), [])
+
+        # iterating over Unicode strings still yields bytestring chunks.
+        r.streaming_content = iter(['hello', 'café'])
+        chunks = list(r)
+        # '\xc3\xa9' == unichr(233).encode('utf-8')
+        self.assertEqual(chunks, [b'hello', b'caf\xc3\xa9'])
+        for chunk in chunks:
+            self.assertIsInstance(chunk, six.binary_type)
 
         # streaming responses don't have a `content` attribute.
         self.assertFalse(hasattr(r, 'content'))

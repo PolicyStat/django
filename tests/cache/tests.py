@@ -4,9 +4,9 @@
 # Uses whatever cache backend is set in the test settings file.
 from __future__ import unicode_literals
 
+import copy
 import os
 import re
-import copy
 import shutil
 import tempfile
 import threading
@@ -15,35 +15,41 @@ import unittest
 import warnings
 
 from django.conf import settings
-from django.core import management
-from django.core.cache import (cache, caches, CacheKeyWarning,
-    InvalidCacheBackendError, DEFAULT_CACHE_ALIAS)
-from django.core.context_processors import csrf
-from django.db import connection, connections, router, transaction
+from django.core import management, signals
+from django.core.cache import (
+    DEFAULT_CACHE_ALIAS, CacheKeyWarning, InvalidCacheBackendError, cache,
+    caches, close_caches, get_cache,
+)
 from django.core.cache.utils import make_template_fragment_key
-from django.http import HttpResponse, StreamingHttpResponse
-from django.middleware.cache import (FetchFromCacheMiddleware,
-    UpdateCacheMiddleware, CacheMiddleware)
+from django.db import connection, connections, transaction
+from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
+from django.middleware.cache import (
+    CacheMiddleware, FetchFromCacheMiddleware, UpdateCacheMiddleware,
+)
 from django.middleware.csrf import CsrfViewMiddleware
-from django.template import Template
+from django.template import engines
+from django.template.context_processors import csrf
 from django.template.response import TemplateResponse
-from django.test import TestCase, TransactionTestCase, RequestFactory, override_settings
+from django.test import (
+    RequestFactory, TestCase, TransactionTestCase, ignore_warnings,
+    override_settings,
+)
 from django.test.signals import setting_changed
-from django.test.utils import IgnoreDeprecationWarningsMixin
-from django.utils import six
-from django.utils import timezone
-from django.utils import translation
-from django.utils.cache import (patch_vary_headers, get_cache_key,
-    learn_cache_key, patch_cache_control, patch_response_headers)
+from django.utils import six, timezone, translation
+from django.utils.cache import (
+    get_cache_key, learn_cache_key, patch_cache_control,
+    patch_response_headers, patch_vary_headers,
+)
+from django.utils.deprecation import RemovedInDjango19Warning
 from django.utils.encoding import force_text
 from django.views.decorators.cache import cache_page
+
+from .models import Poll, expensive_calculation
 
 try:    # Use the same idiom as in cache backends
     from django.utils.six.moves import cPickle as pickle
 except ImportError:
     import pickle
-
-from .models import Poll, expensive_calculation
 
 
 # functions/classes for complex data type tests
@@ -217,7 +223,7 @@ def caches_setting_for_tests(base=None, **params):
     # This results in the following search order:
     # params -> _caches_setting_base -> base
     base = base or {}
-    setting = dict((k, base.copy()) for k in _caches_setting_base.keys())
+    setting = {k: base.copy() for k in _caches_setting_base.keys()}
     for key, cache_params in setting.items():
         cache_params.update(_caches_setting_base[key])
         cache_params.update(params)
@@ -953,14 +959,17 @@ class DBCacheRouter(object):
     def db_for_read(self, model, **hints):
         if model._meta.app_label == 'django_cache':
             return 'other'
+        return None
 
     def db_for_write(self, model, **hints):
         if model._meta.app_label == 'django_cache':
             return 'other'
+        return None
 
-    def allow_migrate(self, db, model):
-        if model._meta.app_label == 'django_cache':
+    def allow_migrate(self, db, app_label, **hints):
+        if app_label == 'django_cache':
             return db == 'other'
+        return None
 
 
 @override_settings(
@@ -974,29 +983,25 @@ class DBCacheRouter(object):
 class CreateCacheTableForDBCacheTests(TestCase):
     multi_db = True
 
+    @override_settings(DATABASE_ROUTERS=[DBCacheRouter()])
     def test_createcachetable_observes_database_router(self):
-        old_routers = router.routers
-        try:
-            router.routers = [DBCacheRouter()]
-            # cache table should not be created on 'default'
-            with self.assertNumQueries(0, using='default'):
-                management.call_command('createcachetable',
-                                        database='default',
-                                        verbosity=0, interactive=False)
-            # cache table should be created on 'other'
-            # Queries:
-            #   1: check table doesn't already exist
-            #   2: create savepoint (if transactional DDL is supported)
-            #   3: create the table
-            #   4: create the index
-            #   5: release savepoint (if transactional DDL is supported)
-            num = 5 if connections['other'].features.can_rollback_ddl else 3
-            with self.assertNumQueries(num, using='other'):
-                management.call_command('createcachetable',
-                                        database='other',
-                                        verbosity=0, interactive=False)
-        finally:
-            router.routers = old_routers
+        # cache table should not be created on 'default'
+        with self.assertNumQueries(0, using='default'):
+            management.call_command('createcachetable',
+                                    database='default',
+                                    verbosity=0, interactive=False)
+        # cache table should be created on 'other'
+        # Queries:
+        #   1: check table doesn't already exist
+        #   2: create savepoint (if transactional DDL is supported)
+        #   3: create the table
+        #   4: create the index
+        #   5: release savepoint (if transactional DDL is supported)
+        num = 5 if connections['other'].features.can_rollback_ddl else 3
+        with self.assertNumQueries(num, using='other'):
+            management.call_command('createcachetable',
+                                    database='other',
+                                    verbosity=0, interactive=False)
 
 
 class PicklingSideEffect(object):
@@ -1222,10 +1227,10 @@ class CustomCacheKeyValidationTests(TestCase):
         }
     }
 )
-class GetCacheTests(IgnoreDeprecationWarningsMixin, TestCase):
+class GetCacheTests(TestCase):
 
+    @ignore_warnings(category=RemovedInDjango19Warning)
     def test_simple(self):
-        from django.core.cache import caches, get_cache
         self.assertIsInstance(
             caches[DEFAULT_CACHE_ALIAS],
             get_cache('default').__class__
@@ -1240,18 +1245,21 @@ class GetCacheTests(IgnoreDeprecationWarningsMixin, TestCase):
         self.assertRaises(InvalidCacheBackendError, get_cache, 'does_not_exist')
 
     def test_close(self):
-        from django.core import signals
         self.assertFalse(cache.closed)
         signals.request_finished.send(self.__class__)
         self.assertTrue(cache.closed)
 
+    @ignore_warnings(category=RemovedInDjango19Warning)
     def test_close_deprecated(self):
-        from django.core.cache import get_cache
-        from django.core import signals
         cache = get_cache('cache.closeable_cache.CacheClass')
         self.assertFalse(cache.closed)
-        signals.request_finished.send(self.__class__)
-        self.assertTrue(cache.closed)
+        # Ensure that we don't close the global cache instances.
+        signals.request_finished.disconnect(close_caches)
+        try:
+            signals.request_finished.send(self.__class__)
+            self.assertTrue(cache.closed)
+        finally:
+            signals.request_finished.connect(close_caches)
 
 
 DEFAULT_MEMORY_CACHES_SETTINGS = {
@@ -1318,7 +1326,7 @@ class DefaultNonExpiringCacheKeyTests(TestCase):
         self.assertIsNotNone(cache._expire_info[cache_key])
 
     @override_settings(CACHES=NEVER_EXPIRING_CACHES_SETTINGS)
-    def text_caches_set_with_timeout_as_none_set_non_expiring_key(self):
+    def test_caches_set_with_timeout_as_none_set_non_expiring_key(self):
         """Memory caches that have the TIMEOUT parameter set to `None` will set
         a non expiring key by default.
         """
@@ -1347,6 +1355,9 @@ class CacheUtils(TestCase):
         self.host = 'www.example.com'
         self.path = '/cache/test/'
         self.factory = RequestFactory(HTTP_HOST=self.host)
+
+    def tearDown(self):
+        cache.clear()
 
     def _get_request_cache(self, method='GET', query_string=None, update_cache=None):
         request = self._get_request(self.host, self.path,
@@ -1382,7 +1393,6 @@ class CacheUtils(TestCase):
     def test_get_cache_key(self):
         request = self.factory.get(self.path)
         response = HttpResponse()
-        key_prefix = 'localprefix'
         # Expect None if no headers have been set yet.
         self.assertIsNone(get_cache_key(request))
         # Set headers to an empty list.
@@ -1394,6 +1404,7 @@ class CacheUtils(TestCase):
             '18a03f9c9649f7d684af5db3524f5c99.d41d8cd98f00b204e9800998ecf8427e'
         )
         # Verify that a specified key_prefix is taken into account.
+        key_prefix = 'localprefix'
         learn_cache_key(request, response, key_prefix=key_prefix)
         self.assertEqual(
             get_cache_key(request, key_prefix=key_prefix),
@@ -2017,7 +2028,8 @@ class TestWithTemplateResponse(TestCase):
             ('Cookie    ,     Accept-Encoding', ('Accept-Encoding', 'cookie'), 'Cookie, Accept-Encoding'),
         )
         for initial_vary, newheaders, resulting_vary in headers:
-            response = TemplateResponse(HttpResponse(), Template("This is a test"))
+            template = engines['django'].from_string("This is a test")
+            response = TemplateResponse(HttpRequest(), template)
             if initial_vary is not None:
                 response['Vary'] = initial_vary
             patch_vary_headers(response, newheaders)
@@ -2025,7 +2037,8 @@ class TestWithTemplateResponse(TestCase):
 
     def test_get_cache_key(self):
         request = self.factory.get(self.path)
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         key_prefix = 'localprefix'
         # Expect None if no headers have been set yet.
         self.assertIsNone(get_cache_key(request))
@@ -2047,7 +2060,8 @@ class TestWithTemplateResponse(TestCase):
 
     def test_get_cache_key_with_query(self):
         request = self.factory.get(self.path, {'test': 1})
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         # Expect None if no headers have been set yet.
         self.assertIsNone(get_cache_key(request))
         # Set headers to an empty list.
@@ -2061,7 +2075,8 @@ class TestWithTemplateResponse(TestCase):
 
     @override_settings(USE_ETAGS=False)
     def test_without_etag(self):
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         self.assertFalse(response.has_header('ETag'))
         patch_response_headers(response)
         self.assertFalse(response.has_header('ETag'))
@@ -2070,7 +2085,8 @@ class TestWithTemplateResponse(TestCase):
 
     @override_settings(USE_ETAGS=True)
     def test_with_etag(self):
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         self.assertFalse(response.has_header('ETag'))
         patch_response_headers(response)
         self.assertFalse(response.has_header('ETag'))

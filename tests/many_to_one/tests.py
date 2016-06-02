@@ -1,14 +1,16 @@
-from copy import deepcopy
 import datetime
+from copy import deepcopy
 
-from django.core.exceptions import MultipleObjectsReturned, FieldError
+from django.core.exceptions import FieldError, MultipleObjectsReturned
 from django.db import models, transaction
 from django.test import TestCase
 from django.utils import six
 from django.utils.translation import ugettext_lazy
 
-from .models import (Article, Reporter, First, Third, Parent, Child,
-    ToFieldChild, Category, Record, Relation, School, Student)
+from .models import (
+    Article, Category, Child, First, Parent, Record, Relation, Reporter,
+    School, Student, Third, ToFieldChild,
+)
 
 
 class ManyToOneTests(TestCase):
@@ -437,11 +439,11 @@ class ManyToOneTests(TestCase):
         expected_message = "Cannot resolve keyword 'notafield' into field. Choices are: %s"
 
         self.assertRaisesMessage(FieldError,
-                                 expected_message % ', '.join(Reporter._meta.get_all_field_names()),
+                                 expected_message % ', '.join(sorted(f.name for f in Reporter._meta.get_fields())),
                                  Article.objects.values_list,
                                  'reporter__notafield')
         self.assertRaisesMessage(FieldError,
-                                 expected_message % ', '.join(['EXTRA'] + Article._meta.get_all_field_names()),
+                                 expected_message % ', '.join(['EXTRA'] + sorted(f.name for f in Article._meta.get_fields())),
                                  Article.objects.extra(select={'EXTRA': 'EXTRA_SELECT'}).values_list,
                                  'notafield')
 
@@ -497,15 +499,13 @@ class ManyToOneTests(TestCase):
 
         # Creation using keyword argument and unsaved related instance (#8070).
         p = Parent()
-        with self.assertRaisesMessage(ValueError,
-                'Cannot assign "%r": "%s" instance isn\'t saved in the database.'
-                % (p, Child.parent.field.rel.to._meta.object_name)):
-            Child(parent=p)
+        msg = "save() prohibited to prevent data loss due to unsaved related object 'parent'."
+        with self.assertRaisesMessage(ValueError, msg):
+            Child.objects.create(parent=p)
 
-        with self.assertRaisesMessage(ValueError,
-                'Cannot assign "%r": "%s" instance isn\'t saved in the database.'
-                % (p, Child.parent.field.rel.to._meta.object_name)):
-            ToFieldChild(parent=p)
+        msg = "save() prohibited to prevent data loss due to unsaved related object 'parent'."
+        with self.assertRaisesMessage(ValueError, msg):
+            ToFieldChild.objects.create(parent=p)
 
         # Creation using attname keyword argument and an id will cause the
         # related object to be fetched.

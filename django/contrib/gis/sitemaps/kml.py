@@ -1,7 +1,7 @@
 from django.apps import apps
-from django.core import urlresolvers
-from django.contrib.sitemaps import Sitemap
 from django.contrib.gis.db.models.fields import GeometryField
+from django.contrib.sitemaps import Sitemap
+from django.core import urlresolvers
 from django.db import models
 
 
@@ -44,7 +44,7 @@ class KMLSitemap(Sitemap):
 
     def get_urls(self, page=1, site=None, protocol=None):
         """
-        This method is overrridden so the appropriate `geo_format` attribute
+        This method is overridden so the appropriate `geo_format` attribute
         is placed on each URL element.
         """
         urls = Sitemap.get_urls(self, page=page, site=site, protocol=protocol)

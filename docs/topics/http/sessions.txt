@@ -171,7 +171,7 @@ and the :setting:`SECRET_KEY` setting.
     Finally, the size of a cookie can have an impact on the `speed of your site`_.
 
 .. _`common limit of 4096 bytes`: http://tools.ietf.org/html/rfc2965#section-5.3
-.. _`replay attacks`: http://en.wikipedia.org/wiki/Replay_attack
+.. _`replay attacks`: https://en.wikipedia.org/wiki/Replay_attack
 .. _`speed of your site`: http://yuiblog.com/blog/2007/03/01/performance-research-part-3/
 
 Using sessions in views
@@ -226,7 +226,7 @@ You can edit it multiple times.
 
     .. method:: flush()
 
-      Delete the current session data from the session and delete the session
+      Deletes the current session data from the session and deletes the session
       cookie. This is used if you want to ensure that the previous session data
       can't be accessed again from the user's browser (for example, the
       :func:`django.contrib.auth.logout()` function calls it).

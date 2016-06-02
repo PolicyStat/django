@@ -2,28 +2,29 @@
 from __future__ import unicode_literals
 
 import os
-import sys
 import re
-from datetime import datetime
-from itertools import groupby, cycle as itertools_cycle
+import sys
 import warnings
+from datetime import datetime
+from itertools import cycle as itertools_cycle, groupby
 
 from django.conf import settings
-from django.template.base import (Node, NodeList, Template, Context, Library,
-    TemplateSyntaxError, VariableDoesNotExist, InvalidTemplateLibrary,
-    BLOCK_TAG_START, BLOCK_TAG_END, VARIABLE_TAG_START, VARIABLE_TAG_END,
-    SINGLE_BRACE_START, SINGLE_BRACE_END, COMMENT_TAG_START, COMMENT_TAG_END,
-    VARIABLE_ATTRIBUTE_SEPARATOR, get_library, token_kwargs, kwarg_re,
-    render_value_in_context)
-from django.template.smartif import IfParser, Literal
+from django.template.base import (
+    BLOCK_TAG_END, BLOCK_TAG_START, COMMENT_TAG_END, COMMENT_TAG_START,
+    SINGLE_BRACE_END, SINGLE_BRACE_START, VARIABLE_ATTRIBUTE_SEPARATOR,
+    VARIABLE_TAG_END, VARIABLE_TAG_START, Context, InvalidTemplateLibrary,
+    Library, Node, NodeList, Template, TemplateSyntaxError,
+    VariableDoesNotExist, get_library, kwarg_re, render_value_in_context,
+    token_kwargs,
+)
 from django.template.defaultfilters import date
-from django.utils.deprecation import RemovedInDjango20Warning
+from django.template.smartif import IfParser, Literal
+from django.utils import six, timezone
+from django.utils.deprecation import RemovedInDjango110Warning
 from django.utils.encoding import force_text, smart_text
-from django.utils.lorem_ipsum import words, paragraphs
-from django.utils.safestring import mark_safe
 from django.utils.html import format_html
-from django.utils import six
-from django.utils import timezone
+from django.utils.lorem_ipsum import paragraphs, words
+from django.utils.safestring import mark_safe
 
 register = Library()
 
@@ -56,7 +57,7 @@ class CsrfTokenNode(Node):
             if csrf_token == 'NOTPROVIDED':
                 return format_html("")
             else:
-                return format_html("<input type='hidden' name='csrfmiddlewaretoken' value='{0}' />", csrf_token)
+                return format_html("<input type='hidden' name='csrfmiddlewaretoken' value='{}' />", csrf_token)
         else:
             # It's very probable that the token is missing because of
             # misconfiguration, so we raise a warning
@@ -93,7 +94,7 @@ class DebugNode(Node):
         from pprint import pformat
         output = [force_text(pformat(val)) for val in context]
         output.append('\n\n')
-        output.append(pformat(sys.modules))
+        output.append(force_text(pformat(sys.modules)))
         return ''.join(output)
 
 
@@ -195,10 +196,10 @@ class ForNode(Node):
                     # Check loop variable count before unpacking
                     if num_loopvars != len_item:
                         warnings.warn(
-                            "Need {0} values to unpack in for loop; got {1}. "
-                            "This will raise an exception in Django 2.0."
+                            "Need {} values to unpack in for loop; got {}. "
+                            "This will raise an exception in Django 1.10."
                             .format(num_loopvars, len_item),
-                            RemovedInDjango20Warning)
+                            RemovedInDjango110Warning)
                     try:
                         unpacked_vars = dict(zip(self.loopvars, item))
                     except TypeError:
@@ -208,9 +209,9 @@ class ForNode(Node):
                         context.update(unpacked_vars)
                 else:
                     context[self.loopvars[0]] = item
-                # In TEMPLATE_DEBUG mode provide source of the node which
-                # actually raised the exception
-                if settings.TEMPLATE_DEBUG:
+                # In debug mode provide the source of the node which raised
+                # the exception
+                if context.template.engine.debug:
                     for node in self.nodelist_loop:
                         try:
                             nodelist.append(node.render(context))
@@ -375,9 +376,9 @@ class RegroupNode(Node):
         return ''
 
 
-def include_is_allowed(filepath):
+def include_is_allowed(filepath, allowed_include_roots):
     filepath = os.path.abspath(filepath)
-    for root in settings.ALLOWED_INCLUDE_ROOTS:
+    for root in allowed_include_roots:
         if filepath.startswith(root):
             return True
     return False
@@ -391,7 +392,7 @@ class SsiNode(Node):
     def render(self, context):
         filepath = self.filepath.resolve(context)
 
-        if not include_is_allowed(filepath):
+        if not include_is_allowed(filepath, context.template.engine.allowed_include_roots):
             if settings.DEBUG:
                 return "[Didn't have permission to include file]"
             else:
@@ -403,7 +404,7 @@ class SsiNode(Node):
             output = ''
         if self.parsed:
             try:
-                t = Template(output, name=filepath)
+                t = Template(output, name=filepath, engine=context.template.engine)
                 return t.render(context)
             except TemplateSyntaxError as e:
                 if settings.DEBUG:
@@ -419,12 +420,19 @@ class LoadNode(Node):
 
 
 class NowNode(Node):
-    def __init__(self, format_string):
+    def __init__(self, format_string, asvar=None):
         self.format_string = format_string
+        self.asvar = asvar
 
     def render(self, context):
         tzinfo = timezone.get_current_timezone() if settings.USE_TZ else None
-        return date(datetime.now(tz=tzinfo), self.format_string)
+        formatted = date(datetime.now(tz=tzinfo), self.format_string)
+
+        if self.asvar:
+            context[self.asvar] = formatted
+            return ''
+        else:
+            return formatted
 
 
 class SpacelessNode(Node):
@@ -469,13 +477,20 @@ class URLNode(Node):
 
         view_name = self.view_name.resolve(context)
 
+        try:
+            current_app = context.request.current_app
+        except AttributeError:
+            # Change the fallback value to None when the deprecation path for
+            # Context.current_app completes in Django 1.10.
+            current_app = context.current_app
+
         # Try to look up the URL twice: once given the view name, and again
         # relative to what we guess is the "main" app. If they both fail,
         # re-raise the NoReverseMatch unless we're using the
         # {% url ... as var %} construct in which case return nothing.
         url = ''
         try:
-            url = reverse(view_name, args=args, kwargs=kwargs, current_app=context.current_app)
+            url = reverse(view_name, args=args, kwargs=kwargs, current_app=current_app)
         except NoReverseMatch:
             exc_info = sys.exc_info()
             if settings.SETTINGS_MODULE:
@@ -483,7 +498,7 @@ class URLNode(Node):
                 try:
                     url = reverse(project_name + '.' + view_name,
                               args=args, kwargs=kwargs,
-                              current_app=context.current_app)
+                              current_app=current_app)
                 except NoReverseMatch:
                     if self.asvar is None:
                         # Re-raise the original exception, not the one with
@@ -555,8 +570,8 @@ class WithNode(Node):
         return "<WithNode>"
 
     def render(self, context):
-        values = dict((key, val.resolve(context)) for key, val in
-                      six.iteritems(self.extra_context))
+        values = {key: val.resolve(context) for key, val in
+                  six.iteritems(self.extra_context)}
         with context.push(**values):
             return self.nodelist.render(context)
 
@@ -755,11 +770,15 @@ def firstof(parser, token):
 
         {% firstof var1 var2 var3 "fallback value" %}
 
-    If you want to escape the output, use a filter tag::
+    If you want to disable auto-escaping of variables you can use::
 
-        {% filter force_escape %}
-            {% firstof var1 var2 var3 "fallback value" %}
-        {% endfilter %}
+        {% autoescape off %}
+            {% firstof var1 var2 var3 "<strong>fallback value</strong>" %}
+        {% autoescape %}
+
+    Or if only some variables should be escaped, you can use::
+
+        {% firstof var1 var2|safe var3 "<strong>fallback value</strong>"|safe %}
 
     """
     bits = token.split_contents()[1:]
@@ -805,7 +824,7 @@ def do_for(parser, token):
     than -- the following::
 
         <ul>
-          {% if althete_list %}
+          {% if athlete_list %}
             {% for athlete in athlete_list %}
               <li>{{ athlete.name }}</li>
             {% endfor %}
@@ -985,7 +1004,7 @@ def do_if(parser, token):
     ``{% if 1>2 %}`` is not a valid if tag.
 
     All supported operators are: ``or``, ``and``, ``in``, ``not in``
-    ``==`` (or ``=``), ``!=``, ``>``, ``>=``, ``<`` and ``<=``.
+    ``==``, ``!=``, ``>``, ``>=``, ``<`` and ``<=``.
 
     Operator precedence follows Python.
     """
@@ -1074,6 +1093,11 @@ def ssi(parser, token):
 
         {% ssi "/home/html/ljworld.com/includes/right_generic.html" parsed %}
     """
+    warnings.warn(
+        "The {% ssi %} tag is deprecated. Use the {% include %} tag instead.",
+        RemovedInDjango110Warning,
+    )
+
     bits = token.split_contents()
     parsed = False
     if len(bits) not in (2, 3):
@@ -1200,10 +1224,14 @@ def now(parser, token):
         It is {% now "jS F Y H:i" %}
     """
     bits = token.split_contents()
+    asvar = None
+    if len(bits) == 4 and bits[-2] == 'as':
+        asvar = bits[-1]
+        bits = bits[:-2]
     if len(bits) != 2:
         raise TemplateSyntaxError("'now' statement takes one argument")
     format_string = bits[1][1:-1]
-    return NowNode(format_string)
+    return NowNode(format_string, asvar)
 
 
 @register.tag

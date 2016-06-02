@@ -2,7 +2,8 @@ import sys
 import threading
 import weakref
 
-from django.utils.six.moves import xrange
+from django.utils.inspect import func_accepts_kwargs
+from django.utils.six.moves import range
 
 if sys.version_info < (3, 4):
     from .weakref_backports import WeakMethod
@@ -60,13 +61,13 @@ class Signal(object):
                 A function or an instance method which is to receive signals.
                 Receivers must be hashable objects.
 
-                If weak is True, then receiver must be weak-referencable.
+                If weak is True, then receiver must be weak referenceable.
 
                 Receivers must be able to accept keyword arguments.
 
-                If receivers have a dispatch_uid attribute, the receiver will
-                not be added if another receiver already exists with that
-                dispatch_uid.
+                If a receiver is connected with a dispatch_uid argument, it
+                will not be added if another receiver was already connected
+                with that dispatch_uid.
 
             sender
                 The sender to which the receiver should respond. Must either be
@@ -87,24 +88,11 @@ class Signal(object):
 
         # If DEBUG is on, check that we got a good receiver
         if settings.configured and settings.DEBUG:
-            import inspect
             assert callable(receiver), "Signal receivers must be callable."
 
             # Check for **kwargs
-            # Not all callables are inspectable with getargspec, so we'll
-            # try a couple different ways but in the end fall back on assuming
-            # it is -- we don't want to prevent registration of valid but weird
-            # callables.
-            try:
-                argspec = inspect.getargspec(receiver)
-            except TypeError:
-                try:
-                    argspec = inspect.getargspec(receiver.__call__)
-                except (TypeError, AttributeError):
-                    argspec = None
-            if argspec:
-                assert argspec[2] is not None, \
-                    "Signal receivers must accept keyword arguments (**kwargs)."
+            if not func_accepts_kwargs(receiver):
+                raise ValueError("Signal receivers must accept keyword arguments (**kwargs).")
 
         if dispatch_uid:
             lookup_key = (dispatch_uid, _make_id(sender))
@@ -160,14 +148,17 @@ class Signal(object):
         else:
             lookup_key = (_make_id(receiver), _make_id(sender))
 
+        disconnected = False
         with self.lock:
             self._clear_dead_receivers()
-            for index in xrange(len(self.receivers)):
+            for index in range(len(self.receivers)):
                 (r_key, _) = self.receivers[index]
                 if r_key == lookup_key:
+                    disconnected = True
                     del self.receivers[index]
                     break
             self.sender_receivers_cache.clear()
+        return disconnected
 
     def has_listeners(self, sender=None):
         return bool(self._live_receivers(sender))
@@ -177,13 +168,13 @@ class Signal(object):
         Send signal from sender to all connected receivers.
 
         If any receiver raises an error, the error propagates back through send,
-        terminating the dispatch loop, so it is quite possible to not have all
-        receivers called if a raises an error.
+        terminating the dispatch loop. So it's possible that all receivers
+        won't be called if an error is raised.
 
         Arguments:
 
             sender
-                The sender of the signal Either a specific object or None.
+                The sender of the signal. Either a specific object or None.
 
             named
                 Named arguments which will be passed to receivers.

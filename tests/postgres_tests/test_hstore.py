@@ -1,17 +1,15 @@
 import json
-import unittest
 
 from django.contrib.postgres import forms
 from django.contrib.postgres.fields import HStoreField
 from django.contrib.postgres.validators import KeysValidator
 from django.core import exceptions, serializers
-from django.db import connection
+from django.forms import Form
 from django.test import TestCase
 
 from .models import HStoreModel
 
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
 class SimpleTests(TestCase):
     apps = ['django.contrib.postgres']
 
@@ -36,7 +34,6 @@ class SimpleTests(TestCase):
         self.assertEqual(reloaded.field, value)
 
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
 class TestQuerying(TestCase):
 
     def setUp(self):
@@ -114,10 +111,27 @@ class TestQuerying(TestCase):
             self.objs[:3]
         )
 
+    def test_key_isnull(self):
+        obj = HStoreModel.objects.create(field={'a': None})
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a__isnull=True),
+            self.objs[2:5] + [obj]
+        )
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a__isnull=False),
+            self.objs[:2]
+        )
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
+    def test_usage_in_subquery(self):
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(id__in=HStoreModel.objects.filter(field__a='b')),
+            self.objs[:2]
+        )
+
+
 class TestSerialization(TestCase):
-    test_data = '[{"fields": {"field": "{\\"a\\": \\"b\\"}"}, "model": "postgres_tests.hstoremodel", "pk": null}]'
+    test_data = ('[{"fields": {"field": "{\\"a\\": \\"b\\"}"}, '
+                 '"model": "postgres_tests.hstoremodel", "pk": null}]')
 
     def test_dumping(self):
         instance = HStoreModel(field={'a': 'b'})
@@ -127,6 +141,12 @@ class TestSerialization(TestCase):
     def test_loading(self):
         instance = list(serializers.deserialize('json', self.test_data))[0].object
         self.assertEqual(instance.field, {'a': 'b'})
+
+    def test_roundtrip_with_null(self):
+        instance = HStoreModel(field={'a': 'b', 'c': None})
+        data = serializers.serialize('json', [instance])
+        new_instance = list(serializers.deserialize('json', data))[0].object
+        self.assertEqual(instance.field, new_instance.field)
 
 
 class TestValidation(TestCase):
@@ -167,6 +187,27 @@ class TestFormField(TestCase):
         model_field = HStoreField()
         form_field = model_field.formfield()
         self.assertIsInstance(form_field, forms.HStoreField)
+
+    def test_field_has_changed(self):
+        class HStoreFormTest(Form):
+            f1 = forms.HStoreField()
+        form_w_hstore = HStoreFormTest()
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'})
+        self.assertTrue(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'}, initial={'f1': '{"a": 1}'})
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 2}'}, initial={'f1': '{"a": 1}'})
+        self.assertTrue(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 1}'}, initial={'f1': {"a": 1}})
+        self.assertFalse(form_w_hstore.has_changed())
+
+        form_w_hstore = HStoreFormTest({'f1': '{"a": 2}'}, initial={'f1': {"a": 1}})
+        self.assertTrue(form_w_hstore.has_changed())
 
 
 class TestValidator(TestCase):

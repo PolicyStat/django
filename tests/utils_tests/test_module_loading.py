@@ -1,19 +1,20 @@
 import imp
-from importlib import import_module
 import os
 import sys
 import unittest
 import warnings
+from importlib import import_module
 from zipimport import zipimporter
 
 from django.core.exceptions import ImproperlyConfigured
-from django.test import SimpleTestCase, modify_settings
-from django.test.utils import IgnoreDeprecationWarningsMixin, extend_sys_path
+from django.test import SimpleTestCase, ignore_warnings, modify_settings
+from django.test.utils import extend_sys_path
 from django.utils import six
-from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.module_loading import (autodiscover_modules, import_by_path, import_string,
-                                         module_has_submodule)
 from django.utils._os import upath
+from django.utils.deprecation import RemovedInDjango19Warning
+from django.utils.module_loading import (
+    autodiscover_modules, import_by_path, import_string, module_has_submodule,
+)
 
 
 class DefaultLoader(unittest.TestCase):
@@ -110,7 +111,8 @@ class EggLoader(unittest.TestCase):
             self.assertRaises(ImportError, import_module, 'egg_module.sub1.sub2.no_such_module')
 
 
-class ModuleImportTestCase(IgnoreDeprecationWarningsMixin, unittest.TestCase):
+@ignore_warnings(category=RemovedInDjango19Warning)
+class ModuleImportTestCase(unittest.TestCase):
     def test_import_by_path(self):
         cls = import_by_path('django.utils.module_loading.import_by_path')
         self.assertEqual(cls, import_by_path)
@@ -148,8 +150,10 @@ class ModuleImportTestCase(IgnoreDeprecationWarningsMixin, unittest.TestCase):
 
         # Test exceptions raised
         self.assertRaises(ImportError, import_string, 'no_dots_in_path')
-        self.assertRaises(ImportError, import_string, 'utils_tests.unexistent')
         self.assertRaises(ImportError, import_string, 'unexistent.path')
+        msg = 'Module "utils_tests" does not define a "unexistent" attribute'
+        with six.assertRaisesRegex(self, ImportError, msg):
+            import_string('utils_tests.unexistent')
 
 
 @modify_settings(INSTALLED_APPS={'append': 'utils_tests.test_module'})

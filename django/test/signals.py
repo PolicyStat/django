@@ -1,17 +1,17 @@
 import os
-import time
 import threading
+import time
 import warnings
 
 from django.conf import settings
-from django.db import connections
-from django.dispatch import receiver, Signal
+from django.core.signals import setting_changed
+from django.db import connections, router
+from django.db.utils import ConnectionRouter
+from django.dispatch import Signal, receiver
 from django.utils import timezone
 from django.utils.functional import empty
 
 template_rendered = Signal(providing_args=["template", "context"])
-
-setting_changed = Signal(providing_args=["setting", "value", "enter"])
 
 # Most setting_changed receivers are supposed to be added below,
 # except for cases where the receiver is related to a contrib app.
@@ -37,8 +37,8 @@ def update_installed_apps(**kwargs):
         from django.core.management import get_commands
         get_commands.cache_clear()
         # Rebuild templatetags module cache.
-        from django.template import base as mod
-        mod.templatetags_modules = []
+        from django.template.base import get_templatetags_modules
+        get_templatetags_modules.cache_clear()
         # Rebuild get_app_template_dirs cache.
         from django.template.utils import get_app_template_dirs
         get_app_template_dirs.cache_clear()
@@ -59,7 +59,7 @@ def update_connections_time_zone(**kwargs):
             time.tzset()
 
         # Reset local time zone cache
-        timezone._localtime = None
+        timezone.get_default_timezone.cache_clear()
 
     # Reset the database connections' time zone
     if kwargs['setting'] == 'USE_TZ' and settings.TIME_ZONE != 'UTC':
@@ -73,22 +73,39 @@ def update_connections_time_zone(**kwargs):
     for conn in connections.all():
         conn.settings_dict['TIME_ZONE'] = tz
         tz_sql = conn.ops.set_time_zone_sql()
-        if tz_sql:
+        if tz_sql and tz:
             conn.cursor().execute(tz_sql, [tz])
 
 
 @receiver(setting_changed)
-def clear_context_processors_cache(**kwargs):
-    if kwargs['setting'] == 'TEMPLATE_CONTEXT_PROCESSORS':
-        from django.template import context
-        context._standard_context_processors = None
+def clear_routers_cache(**kwargs):
+    if kwargs['setting'] == 'DATABASE_ROUTERS':
+        router.routers = ConnectionRouter().routers
 
 
 @receiver(setting_changed)
-def clear_template_loaders_cache(**kwargs):
-    if kwargs['setting'] == 'TEMPLATE_LOADERS':
-        from django.template.loaders.utils import get_template_loaders
-        get_template_loaders.cache_clear()
+def reset_template_engines(**kwargs):
+    if kwargs['setting'] in {
+        'TEMPLATES',
+        'TEMPLATE_DIRS',
+        'ALLOWED_INCLUDE_ROOTS',
+        'TEMPLATE_CONTEXT_PROCESSORS',
+        'TEMPLATE_DEBUG',
+        'TEMPLATE_LOADERS',
+        'TEMPLATE_STRING_IF_INVALID',
+        'DEBUG',
+        'FILE_CHARSET',
+        'INSTALLED_APPS',
+    }:
+        from django.template import engines
+        try:
+            del engines.templates
+        except AttributeError:
+            pass
+        engines._templates = None
+        engines._engines = {}
+        from django.template.engine import Engine
+        Engine.get_default.cache_clear()
 
 
 @receiver(setting_changed)
@@ -140,3 +157,24 @@ def root_urlconf_changed(**kwargs):
         from django.core.urlresolvers import clear_url_caches, set_urlconf
         clear_url_caches()
         set_urlconf(None)
+
+
+@receiver(setting_changed)
+def static_storage_changed(**kwargs):
+    if kwargs['setting'] in {
+        'STATICFILES_STORAGE',
+        'STATIC_ROOT',
+        'STATIC_URL',
+    }:
+        from django.contrib.staticfiles.storage import staticfiles_storage
+        staticfiles_storage._wrapped = empty
+
+
+@receiver(setting_changed)
+def static_finders_changed(**kwargs):
+    if kwargs['setting'] in {
+        'STATICFILES_DIRS',
+        'STATIC_ROOT',
+    }:
+        from django.contrib.staticfiles.finders import get_finder
+        get_finder.cache_clear()

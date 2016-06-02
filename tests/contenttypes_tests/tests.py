@@ -1,22 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-import sys
-
 from django.apps.registry import Apps, apps
-from django.contrib.contenttypes.fields import (
-    GenericForeignKey, GenericRelation
-)
 from django.contrib.contenttypes import management
+from django.contrib.contenttypes.fields import (
+    GenericForeignKey, GenericRelation,
+)
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
-from django.db import connections, models, router
-from django.test import TestCase
-from django.test.utils import override_settings
-from django.utils.encoding import force_str
-from django.utils.six import StringIO
+from django.db import connections, models
+from django.test import TestCase, override_settings
+from django.test.utils import captured_stdout
+from django.utils.encoding import force_str, force_text
 
-from .models import Author, Article, SchemeIncludedURL
+from .models import Article, Author, SchemeIncludedURL
 
 
 @override_settings(ROOT_URLCONF='contenttypes_tests.urls')
@@ -90,7 +87,7 @@ class ContentTypesViewsTests(TestCase):
         ct = ContentType.objects.get_for_model(ModelCreatedOnTheFly)
         self.assertEqual(ct.app_label, 'my_great_app')
         self.assertEqual(ct.model, 'modelcreatedonthefly')
-        self.assertEqual(ct.name, 'a model created on the fly')
+        self.assertEqual(force_text(ct), 'modelcreatedonthefly')
 
 
 class IsolatedModelsTestCase(TestCase):
@@ -105,6 +102,7 @@ class IsolatedModelsTestCase(TestCase):
         apps.clear_cache()
 
 
+@override_settings(SILENCED_SYSTEM_CHECKS=['fields.W342'])  # ForeignKey(unique=True)
 class GenericForeignKeyTests(IsolatedModelsTestCase):
 
     def test_str(self):
@@ -202,6 +200,7 @@ class GenericForeignKeyTests(IsolatedModelsTestCase):
         ]
         self.assertEqual(errors, expected)
 
+    @override_settings(INSTALLED_APPS=['django.contrib.auth', 'django.contrib.contenttypes', 'contenttypes_tests'])
     def test_generic_foreign_key_checks_are_performed(self):
         class MyGenericForeignKey(GenericForeignKey):
             def check(self, **kwargs):
@@ -212,27 +211,6 @@ class GenericForeignKeyTests(IsolatedModelsTestCase):
 
         errors = checks.run_checks()
         self.assertEqual(errors, ['performed!'])
-
-    def test_unsaved_instance_on_generic_foreign_key(self):
-        """
-        #10811 -- Assigning an unsaved object to GenericForeignKey
-        should raise an exception.
-        """
-        class Model(models.Model):
-            content_type = models.ForeignKey(ContentType, null=True)
-            object_id = models.PositiveIntegerField(null=True)
-            content_object = GenericForeignKey('content_type', 'object_id')
-
-        author = Author(name='Author')
-        model = Model()
-        model.content_object = None   # no error here as content_type allows None
-        with self.assertRaisesMessage(ValueError,
-                                    'Cannot assign "%r": "%s" instance isn\'t saved in the database.'
-                                    % (author, author._meta.object_name)):
-            model.content_object = author   # raised ValueError here as author is unsaved
-
-        author.save()
-        model.content_object = author   # no error because the instance is saved
 
 
 class GenericRelationshipTests(IsolatedModelsTestCase):
@@ -365,13 +343,8 @@ class GenericRelationshipTests(IsolatedModelsTestCase):
 class UpdateContentTypesTests(TestCase):
     def setUp(self):
         self.before_count = ContentType.objects.count()
-        ContentType.objects.create(name='fake', app_label='contenttypes_tests', model='Fake')
+        ContentType.objects.create(app_label='contenttypes_tests', model='Fake')
         self.app_config = apps.get_app_config('contenttypes_tests')
-        self.old_stdout = sys.stdout
-        sys.stdout = StringIO()
-
-    def tearDown(self):
-        sys.stdout = self.old_stdout
 
     def test_interactive_true(self):
         """
@@ -379,8 +352,9 @@ class UpdateContentTypesTests(TestCase):
         stale contenttypes.
         """
         management.input = lambda x: force_str("yes")
-        management.update_contenttypes(self.app_config)
-        self.assertIn("Deleting stale content type", sys.stdout.getvalue())
+        with captured_stdout() as stdout:
+            management.update_contenttypes(self.app_config)
+        self.assertIn("Deleting stale content type", stdout.getvalue())
         self.assertEqual(ContentType.objects.count(), self.before_count)
 
     def test_interactive_false(self):
@@ -388,8 +362,9 @@ class UpdateContentTypesTests(TestCase):
         non-interactive mode of update_contenttypes() shouldn't delete stale
         content types.
         """
-        management.update_contenttypes(self.app_config, interactive=False)
-        self.assertIn("Stale content types remain.", sys.stdout.getvalue())
+        with captured_stdout() as stdout:
+            management.update_contenttypes(self.app_config, interactive=False)
+        self.assertIn("Stale content types remain.", stdout.getvalue())
         self.assertEqual(ContentType.objects.count(), self.before_count + 1)
 
 
@@ -401,12 +376,10 @@ class TestRouter(object):
         return 'default'
 
 
+@override_settings(DATABASE_ROUTERS=[TestRouter()])
 class ContentTypesMultidbTestCase(TestCase):
 
     def setUp(self):
-        self.old_routers = router.routers
-        router.routers = [TestRouter()]
-
         # Whenever a test starts executing, only the "default" database is
         # connected. We explicitly connect to the "other" database here. If we
         # don't do it, then it will be implicitly connected later when we query
@@ -414,9 +387,6 @@ class ContentTypesMultidbTestCase(TestCase):
         # extra queries upon connecting (notably mysql executes
         # "SET SQL_AUTO_IS_NULL = 0"), which will affect assertNumQueries().
         connections['other'].ensure_connection()
-
-    def tearDown(self):
-        router.routers = self.old_routers
 
     def test_multidb(self):
         """

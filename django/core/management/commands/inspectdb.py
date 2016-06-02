@@ -1,11 +1,11 @@
 from __future__ import unicode_literals
 
-from collections import OrderedDict
 import keyword
 import re
+from collections import OrderedDict
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connections, DEFAULT_DB_ALIAS
+from django.db import DEFAULT_DB_ALIAS, connections
 
 
 class Command(BaseCommand):
@@ -73,11 +73,12 @@ class Command(BaseCommand):
                 except NotImplementedError:
                     constraints = {}
                 used_column_names = []  # Holds column names used in the table so far
-                for i, row in enumerate(connection.introspection.get_table_description(cursor, table_name)):
+                column_to_field_name = {}  # Maps column names to names of model fields
+                for row in connection.introspection.get_table_description(cursor, table_name):
                     comment_notes = []  # Holds Field notes, to be displayed in a Python comment.
                     extra_params = OrderedDict()  # Holds Field parameters such as 'db_column'.
                     column_name = row[0]
-                    is_relation = i in relations
+                    is_relation = column_name in relations
 
                     att_name, params, notes = self.normalize_col_name(
                         column_name, used_column_names, is_relation)
@@ -85,6 +86,7 @@ class Command(BaseCommand):
                     comment_notes.extend(notes)
 
                     used_column_names.append(att_name)
+                    column_to_field_name[column_name] = att_name
 
                     # Add primary_key and unique, if necessary.
                     if column_name in indexes:
@@ -94,7 +96,7 @@ class Command(BaseCommand):
                             extra_params['unique'] = True
 
                     if is_relation:
-                        rel_to = "self" if relations[i][1] == table_name else table2model(relations[i][1])
+                        rel_to = "self" if relations[column_name][1] == table_name else table2model(relations[column_name][1])
                         if rel_to in known_models:
                             field_type = 'ForeignKey(%s' % rel_to
                         else:
@@ -134,14 +136,14 @@ class Command(BaseCommand):
                     if extra_params:
                         if not field_desc.endswith('('):
                             field_desc += ', '
-                        field_desc += ', '.join([
+                        field_desc += ', '.join(
                             '%s=%s' % (k, strip_prefix(repr(v)))
-                            for k, v in extra_params.items()])
+                            for k, v in extra_params.items())
                     field_desc += ')'
                     if comment_notes:
                         field_desc += '  # ' + ' '.join(comment_notes)
                     yield '    %s' % field_desc
-                for meta_line in self.get_meta(table_name, constraints):
+                for meta_line in self.get_meta(table_name, constraints, column_to_field_name):
                     yield meta_line
 
     def normalize_col_name(self, col_name, used_column_names, is_relation):
@@ -238,7 +240,7 @@ class Command(BaseCommand):
 
         return field_type, field_params, field_notes
 
-    def get_meta(self, table_name, constraints):
+    def get_meta(self, table_name, constraints, column_to_field_name):
         """
         Return a sequence comprising the lines of code necessary
         to construct the inner Meta class for the model corresponding
@@ -251,7 +253,7 @@ class Command(BaseCommand):
                 if len(columns) > 1:
                     # we do not want to include the u"" or u'' prefix
                     # so we build the string rather than interpolate the tuple
-                    tup = '(' + ', '.join("'%s'" % c for c in columns) + ')'
+                    tup = '(' + ', '.join("'%s'" % column_to_field_name[c] for c in columns) + ')'
                     unique_together.append(tup)
         meta = ["",
                 "    class Meta:",

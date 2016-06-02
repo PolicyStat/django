@@ -1,19 +1,17 @@
 import json
 
+from django.contrib.postgres import lookups
 from django.contrib.postgres.forms import SimpleArrayField
 from django.contrib.postgres.validators import ArrayMaxLengthValidator
 from django.core import checks, exceptions
-from django.db.models import Field, Lookup, Transform, IntegerField
+from django.db.models import Field, IntegerField, Transform
+from django.db.models.lookups import Exact
 from django.utils import six
 from django.utils.translation import string_concat, ugettext_lazy as _
 
+from .utils import AttributeSetter
 
 __all__ = ['ArrayField']
-
-
-class AttributeSetter(object):
-    def __init__(self, name, value):
-        setattr(self, name, value)
 
 
 class ArrayField(Field):
@@ -69,22 +67,19 @@ class ArrayField(Field):
         size = self.size or ''
         return '%s[%s]' % (self.base_field.db_type(connection), size)
 
-    def get_prep_value(self, value):
+    def get_db_prep_value(self, value, connection, prepared=False):
         if isinstance(value, list) or isinstance(value, tuple):
-            return [self.base_field.get_prep_value(i) for i in value]
+            return [self.base_field.get_db_prep_value(i, connection, prepared) for i in value]
         return value
-
-    def get_db_prep_lookup(self, lookup_type, value, connection, prepared=False):
-        if lookup_type == 'contains':
-            return [self.get_prep_value(value)]
-        return super(ArrayField, self).get_db_prep_lookup(lookup_type, value,
-                connection, prepared=False)
 
     def deconstruct(self):
         name, path, args, kwargs = super(ArrayField, self).deconstruct()
-        path = 'django.contrib.postgres.fields.ArrayField'
-        args.insert(0, self.base_field)
-        kwargs['size'] = self.size
+        if path == 'django.contrib.postgres.fields.array.ArrayField':
+            path = 'django.contrib.postgres.fields.ArrayField'
+        kwargs.update({
+            'base_field': self.base_field,
+            'size': self.size,
+        })
         return name, path, args, kwargs
 
     def to_python(self, value):
@@ -94,22 +89,17 @@ class ArrayField(Field):
             value = [self.base_field.to_python(val) for val in vals]
         return value
 
-    def get_default(self):
-        """Overridden from the default to prevent string-mangling."""
-        if self.has_default():
-            if callable(self.default):
-                return self.default()
-            return self.default
-        return None
-
     def value_to_string(self, obj):
         values = []
         vals = self._get_val_from_obj(obj)
         base_field = self.base_field
 
         for val in vals:
-            obj = AttributeSetter(base_field.attname, val)
-            values.append(base_field.value_to_string(obj))
+            if val is None:
+                values.append(None)
+            else:
+                obj = AttributeSetter(base_field.attname, val)
+                values.append(base_field.value_to_string(obj))
         return json.dumps(values)
 
     def get_transform(self, name):
@@ -150,6 +140,18 @@ class ArrayField(Field):
                     code='nested_array_mismatch',
                 )
 
+    def run_validators(self, value):
+        super(ArrayField, self).run_validators(value)
+        for i, part in enumerate(value):
+            try:
+                self.base_field.run_validators(part)
+            except exceptions.ValidationError as e:
+                raise exceptions.ValidationError(
+                    string_concat(self.error_messages['item_invalid'], ' '.join(e.messages)),
+                    code='item_invalid',
+                    params={'nth': i},
+                )
+
     def formfield(self, **kwargs):
         defaults = {
             'form_class': SimpleArrayField,
@@ -161,50 +163,49 @@ class ArrayField(Field):
 
 
 @ArrayField.register_lookup
-class ArrayContainsLookup(Lookup):
-    lookup_name = 'contains'
-
-    def as_sql(self, compiler, connection):
-        lhs, lhs_params = self.process_lhs(compiler, connection)
-        rhs, rhs_params = self.process_rhs(compiler, connection)
-        params = lhs_params + rhs_params
-        type_cast = self.lhs.output_field.db_type(connection)
-        return '%s @> %s::%s' % (lhs, rhs, type_cast), params
+class ArrayContains(lookups.DataContains):
+    def as_sql(self, qn, connection):
+        sql, params = super(ArrayContains, self).as_sql(qn, connection)
+        sql = '%s::%s' % (sql, self.lhs.output_field.db_type(connection))
+        return sql, params
 
 
 @ArrayField.register_lookup
-class ArrayContainedByLookup(Lookup):
-    lookup_name = 'contained_by'
-
-    def as_sql(self, compiler, connection):
-        lhs, lhs_params = self.process_lhs(compiler, connection)
-        rhs, rhs_params = self.process_rhs(compiler, connection)
-        params = lhs_params + rhs_params
-        return '%s <@ %s' % (lhs, rhs), params
+class ArrayContainedBy(lookups.ContainedBy):
+    def as_sql(self, qn, connection):
+        sql, params = super(ArrayContainedBy, self).as_sql(qn, connection)
+        sql = '%s::%s' % (sql, self.lhs.output_field.db_type(connection))
+        return sql, params
 
 
 @ArrayField.register_lookup
-class ArrayOverlapLookup(Lookup):
-    lookup_name = 'overlap'
+class ArrayExact(Exact):
+    def as_sql(self, qn, connection):
+        sql, params = super(ArrayExact, self).as_sql(qn, connection)
+        sql = '%s::%s' % (sql, self.lhs.output_field.db_type(connection))
+        return sql, params
 
-    def as_sql(self, compiler, connection):
-        lhs, lhs_params = self.process_lhs(compiler, connection)
-        rhs, rhs_params = self.process_rhs(compiler, connection)
-        params = lhs_params + rhs_params
-        return '%s && %s' % (lhs, rhs), params
+
+@ArrayField.register_lookup
+class ArrayOverlap(lookups.Overlap):
+    def as_sql(self, qn, connection):
+        sql, params = super(ArrayOverlap, self).as_sql(qn, connection)
+        sql = '%s::%s' % (sql, self.lhs.output_field.db_type(connection))
+        return sql, params
 
 
 @ArrayField.register_lookup
 class ArrayLenTransform(Transform):
     lookup_name = 'len'
-
-    @property
-    def output_field(self):
-        return IntegerField()
+    output_field = IntegerField()
 
     def as_sql(self, compiler, connection):
         lhs, params = compiler.compile(self.lhs)
-        return 'array_length(%s, 1)' % lhs, params
+        # Distinguish NULL and empty arrays
+        return (
+            'CASE WHEN %(lhs)s IS NULL THEN NULL ELSE '
+            'coalesce(array_length(%(lhs)s, 1), 0) END'
+        ) % {'lhs': lhs}, params
 
 
 class IndexTransform(Transform):

@@ -2,68 +2,22 @@ import sys
 import time
 
 from django.conf import settings
-from django.db.backends.creation import BaseDatabaseCreation
+from django.db.backends.base.creation import BaseDatabaseCreation
 from django.db.utils import DatabaseError
 from django.utils.six.moves import input
-
 
 TEST_DATABASE_PREFIX = 'test_'
 PASSWORD = 'Im_a_lumberjack'
 
 
 class DatabaseCreation(BaseDatabaseCreation):
-    # This dictionary maps Field objects to their associated Oracle column
-    # types, as strings. Column-type strings can contain format strings; they'll
-    # be interpolated against the values of Field.__dict__ before being output.
-    # If a column type is set to None, it won't be included in the output.
-    #
-    # Any format strings starting with "qn_" are quoted before being used in the
-    # output (the "qn_" prefix is stripped before the lookup is performed.
-
-    data_types = {
-        'AutoField': 'NUMBER(11)',
-        'BinaryField': 'BLOB',
-        'BooleanField': 'NUMBER(1)',
-        'CharField': 'NVARCHAR2(%(max_length)s)',
-        'CommaSeparatedIntegerField': 'VARCHAR2(%(max_length)s)',
-        'DateField': 'DATE',
-        'DateTimeField': 'TIMESTAMP',
-        'DecimalField': 'NUMBER(%(max_digits)s, %(decimal_places)s)',
-        'FileField': 'NVARCHAR2(%(max_length)s)',
-        'FilePathField': 'NVARCHAR2(%(max_length)s)',
-        'FloatField': 'DOUBLE PRECISION',
-        'IntegerField': 'NUMBER(11)',
-        'BigIntegerField': 'NUMBER(19)',
-        'IPAddressField': 'VARCHAR2(15)',
-        'GenericIPAddressField': 'VARCHAR2(39)',
-        'NullBooleanField': 'NUMBER(1)',
-        'OneToOneField': 'NUMBER(11)',
-        'PositiveIntegerField': 'NUMBER(11)',
-        'PositiveSmallIntegerField': 'NUMBER(11)',
-        'SlugField': 'NVARCHAR2(%(max_length)s)',
-        'SmallIntegerField': 'NUMBER(11)',
-        'TextField': 'NCLOB',
-        'TimeField': 'TIMESTAMP',
-        'URLField': 'VARCHAR2(%(max_length)s)',
-        'UUIDField': 'VARCHAR2(32)',
-    }
-
-    data_type_check_constraints = {
-        'BooleanField': '%(qn_column)s IN (0,1)',
-        'NullBooleanField': '(%(qn_column)s IN (0,1)) OR (%(qn_column)s IS NULL)',
-        'PositiveIntegerField': '%(qn_column)s >= 0',
-        'PositiveSmallIntegerField': '%(qn_column)s >= 0',
-    }
-
-    def __init__(self, connection):
-        super(DatabaseCreation, self).__init__(connection)
 
     def _create_test_db(self, verbosity=1, autoclobber=False, keepdb=False):
         parameters = self._get_test_db_params()
         cursor = self.connection.cursor()
         if self._test_database_create():
             try:
-                self._execute_test_db_creation(cursor, parameters, verbosity)
+                self._execute_test_db_creation(cursor, parameters, verbosity, keepdb)
             except Exception as e:
                 # if we want to keep the db, then no need to do any of the below,
                 # just return and skip it all.
@@ -91,7 +45,7 @@ class DatabaseCreation(BaseDatabaseCreation):
                         sys.stderr.write("Got an error destroying the old test database: %s\n" % e)
                         sys.exit(2)
                     try:
-                        self._execute_test_db_creation(cursor, parameters, verbosity)
+                        self._execute_test_db_creation(cursor, parameters, verbosity, keepdb)
                     except Exception as e:
                         sys.stderr.write("Got an error recreating the test database: %s\n" % e)
                         sys.exit(2)
@@ -103,8 +57,11 @@ class DatabaseCreation(BaseDatabaseCreation):
             if verbosity >= 1:
                 print("Creating test user...")
             try:
-                self._create_test_user(cursor, parameters, verbosity)
+                self._create_test_user(cursor, parameters, verbosity, keepdb)
             except Exception as e:
+                # If we want to keep the db, then we want to also keep the user.
+                if keepdb:
+                    return
                 sys.stderr.write("Got an error creating the test user: %s\n" % e)
                 if not autoclobber:
                     confirm = input(
@@ -117,7 +74,7 @@ class DatabaseCreation(BaseDatabaseCreation):
                         self._destroy_test_user(cursor, parameters, verbosity)
                         if verbosity >= 1:
                             print("Creating test user...")
-                        self._create_test_user(cursor, parameters, verbosity)
+                        self._create_test_user(cursor, parameters, verbosity, keepdb)
                     except Exception as e:
                         sys.stderr.write("Got an error recreating the test user: %s\n" % e)
                         sys.exit(2)
@@ -195,7 +152,7 @@ class DatabaseCreation(BaseDatabaseCreation):
             self._execute_test_db_destruction(cursor, parameters, verbosity)
         self.connection.close()
 
-    def _execute_test_db_creation(self, cursor, parameters, verbosity):
+    def _execute_test_db_creation(self, cursor, parameters, verbosity, keepdb=False):
         if verbosity >= 2:
             print("_create_test_db(): dbname = %s" % parameters['user'])
         statements = [
@@ -208,9 +165,11 @@ class DatabaseCreation(BaseDatabaseCreation):
                REUSE AUTOEXTEND ON NEXT 10M MAXSIZE %(maxsize_tmp)s
             """,
         ]
-        self._execute_statements(cursor, statements, parameters, verbosity)
+        # Ignore "tablespace already exists" error when keepdb is on.
+        acceptable_ora_err = 'ORA-01543' if keepdb else None
+        self._execute_allow_fail_statements(cursor, statements, parameters, verbosity, acceptable_ora_err)
 
-    def _create_test_user(self, cursor, parameters, verbosity):
+    def _create_test_user(self, cursor, parameters, verbosity, keepdb=False):
         if verbosity >= 2:
             print("_create_test_user(): username = %s" % parameters['user'])
         statements = [
@@ -227,18 +186,14 @@ class DatabaseCreation(BaseDatabaseCreation):
                      CREATE TRIGGER
                TO %(user)s""",
         ]
-        self._execute_statements(cursor, statements, parameters, verbosity)
+        # Ignore "user already exists" error when keepdb is on
+        acceptable_ora_err = 'ORA-01920' if keepdb else None
+        self._execute_allow_fail_statements(cursor, statements, parameters, verbosity, acceptable_ora_err)
         # Most test-suites can be run without the create-view privilege. But some need it.
         extra = "GRANT CREATE VIEW TO %(user)s"
-        try:
-            self._execute_statements(cursor, [extra], parameters, verbosity, allow_quiet_fail=True)
-        except DatabaseError as err:
-            description = str(err)
-            if 'ORA-01031' in description:
-                if verbosity >= 2:
-                    print("Failed to grant CREATE VIEW permission to test user. This may be ok.")
-            else:
-                raise
+        success = self._execute_allow_fail_statements(cursor, [extra], parameters, verbosity, 'ORA-01031')
+        if not success and verbosity >= 2:
+            print("Failed to grant CREATE VIEW permission to test user. This may be ok.")
 
     def _execute_test_db_destruction(self, cursor, parameters, verbosity):
         if verbosity >= 2:
@@ -269,6 +224,23 @@ class DatabaseCreation(BaseDatabaseCreation):
                 if (not allow_quiet_fail) or verbosity >= 2:
                     sys.stderr.write("Failed (%s)\n" % (err))
                 raise
+
+    def _execute_allow_fail_statements(self, cursor, statements, parameters, verbosity, acceptable_ora_err):
+        """
+        Execute statements which are allowed to fail silently if the Oracle
+        error code given by `acceptable_ora_err` is raised. Return True if the
+        statements execute without an exception, or False otherwise.
+        """
+        try:
+            # Statement can fail when acceptable_ora_err is not None
+            allow_quiet_fail = acceptable_ora_err is not None and len(acceptable_ora_err) > 0
+            self._execute_statements(cursor, statements, parameters, verbosity, allow_quiet_fail=allow_quiet_fail)
+            return True
+        except DatabaseError as err:
+            description = str(err)
+            if acceptable_ora_err is None or acceptable_ora_err not in description:
+                raise
+            return False
 
     def _get_test_db_params(self):
         return {

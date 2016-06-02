@@ -1,16 +1,17 @@
 from __future__ import unicode_literals
 
 import sys
-try:
-    import threading
-except ImportError:
-    threading = None
+import threading
 import time
 from unittest import skipIf, skipUnless
 
-from django.db import (connection, transaction,
-    DatabaseError, Error, IntegrityError, OperationalError)
-from django.test import TransactionTestCase, skipIfDBFeature, skipUnlessDBFeature
+from django.db import (
+    DatabaseError, Error, IntegrityError, OperationalError, connection,
+    transaction,
+)
+from django.test import (
+    TransactionTestCase, skipIfDBFeature, skipUnlessDBFeature,
+)
 from django.utils import six
 
 from .models import Reporter
@@ -397,16 +398,18 @@ class AtomicMiscTests(TransactionTestCase):
     available_apps = []
 
     def test_wrap_callable_instance(self):
-        # Regression test for #20028
+        """#20028 -- Atomic must support wrapping callable instances."""
+
         class Callable(object):
             def __call__(self):
                 pass
+
         # Must not raise an exception
         transaction.atomic(Callable())
 
     @skipUnlessDBFeature('can_release_savepoints')
     def test_atomic_does_not_leak_savepoints_on_failure(self):
-        # Regression test for #23074
+        """#23074 -- Savepoints must be released after rollback."""
 
         # Expect an error when rolling back a savepoint that doesn't exist.
         # Done outside of the transaction block to ensure proper recovery.
@@ -425,3 +428,14 @@ class AtomicMiscTests(TransactionTestCase):
 
                 # This is expected to fail because the savepoint no longer exists.
                 connection.savepoint_rollback(sid)
+
+    @skipIf(connection.features.autocommits_when_autocommit_is_off,
+            "This test requires a non-autocommit mode that doesn't autocommit.")
+    def test_orm_query_without_autocommit(self):
+        """#24921 -- ORM queries must be possible after set_autocommit(False)."""
+        transaction.set_autocommit(False)
+        try:
+            Reporter.objects.create(first_name="Tintin")
+        finally:
+            transaction.rollback()
+            transaction.set_autocommit(True)

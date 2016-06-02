@@ -3,18 +3,18 @@ from __future__ import unicode_literals
 from django.apps import apps
 from django.contrib import admin
 from django.contrib.contenttypes.models import ContentType
-from django.core import management
-from django.core import checks
-from django.db import models, DEFAULT_DB_ALIAS
+from django.core import checks, exceptions, management
+from django.db import DEFAULT_DB_ALIAS, models
 from django.db.models import signals
 from django.test import TestCase, override_settings
 
-
-from .models import (MyPerson, Person, StatusPerson, LowerStatusPerson,
-    MyPersonProxy, Abstract, OtherPerson, User, UserProxy, UserProxyProxy,
-    Country, State, StateProxy, TrackerUser, BaseUser, Bug, ProxyTrackerUser,
-    Improvement, ProxyProxyBug, ProxyBug, ProxyImprovement, Issue)
 from .admin import admin as force_admin_model_registration  # NOQA
+from .models import (
+    Abstract, BaseUser, Bug, Country, Improvement, Issue, LowerStatusPerson,
+    MyPerson, MyPersonProxy, OtherPerson, Person, ProxyBug, ProxyImprovement,
+    ProxyProxyBug, ProxyTrackerUser, State, StateProxy, StatusPerson,
+    TrackerUser, User, UserProxy, UserProxyProxy,
+)
 
 
 class ProxyModelTests(TestCase):
@@ -29,7 +29,7 @@ class ProxyModelTests(TestCase):
             DEFAULT_DB_ALIAS).as_sql()
         self.assertEqual(my_person_sql, person_sql)
 
-    def test_inheretance_new_table(self):
+    def test_inheritance_new_table(self):
         """
         The StatusPerson models should have its own table (it's using ORM-level
         inheritance).
@@ -327,8 +327,18 @@ class ProxyModelTests(TestCase):
         resp = StateProxy.objects.select_related().get(name='New South Wales')
         self.assertEqual(resp.name, 'New South Wales')
 
+    def test_filter_proxy_relation_reverse(self):
+        tu = TrackerUser.objects.create(
+            name='Contributor', status='contrib')
+        with self.assertRaises(exceptions.FieldError):
+            TrackerUser.objects.filter(issue=None),
+        self.assertQuerysetEqual(
+            ProxyTrackerUser.objects.filter(issue=None),
+            [tu], lambda x: x
+        )
+
     def test_proxy_bug(self):
-        contributor = TrackerUser.objects.create(name='Contributor',
+        contributor = ProxyTrackerUser.objects.create(name='Contributor',
             status='contrib')
         someone = BaseUser.objects.create(name='Someone')
         Bug.objects.create(summary='fix this', version='1.1beta',

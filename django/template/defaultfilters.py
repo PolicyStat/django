@@ -1,29 +1,30 @@
 """Default variable filters."""
 from __future__ import unicode_literals
 
-import re
 import random as random_module
-from decimal import Decimal, InvalidOperation, Context, ROUND_HALF_UP
+import re
+import warnings
+from decimal import ROUND_HALF_UP, Context, Decimal, InvalidOperation
 from functools import wraps
 from pprint import pformat
-import warnings
 
-from django.template.base import Variable, Library, VariableDoesNotExist
 from django.conf import settings
-from django.utils import formats
+from django.template.base import Library, Variable, VariableDoesNotExist
+from django.utils import formats, six
 from django.utils.dateformat import format, time_format
-from django.utils.deprecation import RemovedInDjango20Warning
+from django.utils.deprecation import RemovedInDjango110Warning
 from django.utils.encoding import force_text, iri_to_uri
-from django.utils.html import (conditional_escape, escapejs,
-    escape, urlize as _urlize, linebreaks, strip_tags, avoid_wrapping,
-    remove_tags)
+from django.utils.html import (
+    avoid_wrapping, conditional_escape, escape, escapejs, linebreaks,
+    remove_tags, strip_tags, urlize as _urlize,
+)
 from django.utils.http import urlquote
-from django.utils.text import Truncator, wrap, phone2numeric
-from django.utils.safestring import mark_safe, SafeData, mark_for_escaping
-from django.utils import six
+from django.utils.safestring import SafeData, mark_for_escaping, mark_safe
+from django.utils.text import (
+    Truncator, normalize_newlines, phone2numeric, slugify as _slugify, wrap,
+)
 from django.utils.timesince import timesince, timeuntil
 from django.utils.translation import ugettext, ungettext
-from django.utils.text import normalize_newlines, slugify as _slugify
 
 register = Library()
 
@@ -190,7 +191,7 @@ def iriencode(value):
 
 @register.filter(is_safe=True, needs_autoescape=True)
 @stringfilter
-def linenumbers(value, autoescape=None):
+def linenumbers(value, autoescape=True):
     """Displays text with line numbers."""
     lines = value.split('\n')
     # Find the maximum width of the line count, for use with zero padding
@@ -352,14 +353,14 @@ def urlencode(value, safe=None):
 
 @register.filter(is_safe=True, needs_autoescape=True)
 @stringfilter
-def urlize(value, autoescape=None):
+def urlize(value, autoescape=True):
     """Converts URLs in plain text into clickable links."""
     return mark_safe(_urlize(value, nofollow=True, autoescape=autoescape))
 
 
 @register.filter(is_safe=True, needs_autoescape=True)
 @stringfilter
-def urlizetrunc(value, limit, autoescape=None):
+def urlizetrunc(value, limit, autoescape=True):
     """
     Converts URLs into clickable links, truncating URLs to the given character
     limit, and adding 'rel=nofollow' attribute to discourage spamming.
@@ -438,7 +439,7 @@ def cut(value, arg):
 @stringfilter
 def escape_filter(value):
     """
-    Marks the value as a string that should not be auto-escaped.
+    Marks the value as a string that should be auto-escaped.
     """
     return mark_for_escaping(value)
 
@@ -456,7 +457,7 @@ def force_escape(value):
 
 @register.filter("linebreaks", is_safe=True, needs_autoescape=True)
 @stringfilter
-def linebreaks_filter(value, autoescape=None):
+def linebreaks_filter(value, autoescape=True):
     """
     Replaces line breaks in plain text with appropriate HTML; a single
     newline becomes an HTML line break (``<br />``) and a new line
@@ -468,7 +469,7 @@ def linebreaks_filter(value, autoescape=None):
 
 @register.filter(is_safe=True, needs_autoescape=True)
 @stringfilter
-def linebreaksbr(value, autoescape=None):
+def linebreaksbr(value, autoescape=True):
     """
     Converts all newlines in a piece of plain text to HTML line breaks
     (``<br />``).
@@ -551,7 +552,7 @@ def first(value):
 
 
 @register.filter(is_safe=True, needs_autoescape=True)
-def join(value, arg, autoescape=None):
+def join(value, arg, autoescape=True):
     """
     Joins a list with a string, like Python's ``str.join(list)``.
     """
@@ -621,7 +622,7 @@ def slice_filter(value, arg):
 
 
 @register.filter(is_safe=True, needs_autoescape=True)
-def unordered_list(value, autoescape=None):
+def unordered_list(value, autoescape=True):
     """
     Recursively takes a self-nested list and returns an HTML unordered list --
     WITHOUT opening and closing <ul> tags.
@@ -680,22 +681,27 @@ def unordered_list(value, autoescape=None):
 
     def walk_items(item_list):
         item_iterator = iter(item_list)
-        for item in item_iterator:
-            try:
-                next_item = next(item_iterator)
-            except StopIteration:
-                next_item = None
-            if not isinstance(next_item, six.string_types):
+        try:
+            item = next(item_iterator)
+            while True:
                 try:
-                    iter(next_item)
-                except TypeError:
-                    pass
-                else:
-                    yield item, next_item
-                    continue
-            yield item, None
-            if next_item:
-                yield next_item, None
+                    next_item = next(item_iterator)
+                except StopIteration:
+                    yield item, None
+                    break
+                if not isinstance(next_item, six.string_types):
+                    try:
+                        iter(next_item)
+                    except TypeError:
+                        pass
+                    else:
+                        yield item, next_item
+                        item = next(item_iterator)
+                        continue
+                yield item, None
+                item = next_item
+        except StopIteration:
+            pass
 
     def list_formatter(item_list, tabs=1):
         indent = '\t' * tabs
@@ -713,8 +719,8 @@ def unordered_list(value, autoescape=None):
     if converted:
         warnings.warn(
             "The old style syntax in `unordered_list` is deprecated and will "
-            "be removed in Django 2.0. Use the the new format instead.",
-            RemovedInDjango20Warning)
+            "be removed in Django 1.10. Use the the new format instead.",
+            RemovedInDjango110Warning)
     return mark_safe(list_formatter(value))
 
 
@@ -835,7 +841,7 @@ def default_if_none(value, arg):
 
 @register.filter(is_safe=False)
 def divisibleby(value, arg):
-    """Returns True if the value is devisible by the argument."""
+    """Returns True if the value is divisible by the argument."""
     return int(value) % int(arg) == 0
 
 

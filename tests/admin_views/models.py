@@ -2,12 +2,13 @@
 from __future__ import unicode_literals
 
 import datetime
-import tempfile
 import os
+import tempfile
+import uuid
 
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.fields import (
-    GenericForeignKey, GenericRelation
+    GenericForeignKey, GenericRelation,
 )
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.storage import FileSystemStorage
@@ -22,6 +23,13 @@ class Section(models.Model):
     """
     name = models.CharField(max_length=100)
 
+    @property
+    def name_property(self):
+        """
+        A property that simply returns the name. Used to test #24461
+        """
+        return self.name
+
 
 @python_2_unicode_compatible
 class Article(models.Model):
@@ -32,6 +40,7 @@ class Article(models.Model):
     content = models.TextField()
     date = models.DateTimeField()
     section = models.ForeignKey(Section, null=True, blank=True)
+    sub_section = models.ForeignKey(Section, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
 
     def __str__(self):
         return self.title
@@ -315,7 +324,7 @@ class EmptyModel(models.Model):
         return "Primary key = %s" % self.id
 
 
-temp_storage = FileSystemStorage(tempfile.mkdtemp(dir=os.environ['DJANGO_TEST_TEMP_DIR']))
+temp_storage = FileSystemStorage(tempfile.mkdtemp())
 UPLOAD_TO = os.path.join(temp_storage.location, 'test_upload')
 
 
@@ -411,6 +420,7 @@ class Link(models.Model):
     )
     url = models.URLField()
     post = models.ForeignKey("Post")
+    readonly_link_content = models.TextField()
 
 
 class PrePopulatedPost(models.Model):
@@ -428,6 +438,7 @@ class PrePopulatedSubPost(models.Model):
 class Post(models.Model):
     title = models.CharField(max_length=100, help_text="Some help text for the title (with unicode ŠĐĆŽćžšđ)")
     content = models.TextField(help_text="Some help text for the content (with unicode ŠĐĆŽćžšđ)")
+    readonly_content = models.TextField()
     posted = models.DateField(
         default=datetime.date.today,
         help_text="Some help text for the date (with unicode ŠĐĆŽćžšđ)"
@@ -491,10 +502,15 @@ class Plot(models.Model):
 @python_2_unicode_compatible
 class PlotDetails(models.Model):
     details = models.CharField(max_length=100)
-    plot = models.OneToOneField(Plot)
+    plot = models.OneToOneField(Plot, null=True, blank=True)
 
     def __str__(self):
         return self.details
+
+
+class PlotProxy(Plot):
+    class Meta:
+        proxy = True
 
 
 @python_2_unicode_compatible
@@ -545,7 +561,7 @@ class Pizza(models.Model):
 
 
 class Album(models.Model):
-    owner = models.ForeignKey(User)
+    owner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=30)
 
 
@@ -827,39 +843,82 @@ class Worker(models.Model):
 
 # Models for #23329
 class ReferencedByParent(models.Model):
-    pass
+    name = models.CharField(max_length=20, unique=True)
 
 
 class ParentWithFK(models.Model):
-    fk = models.ForeignKey(ReferencedByParent)
+    fk = models.ForeignKey(
+        ReferencedByParent, to_field='name', related_name='hidden+',
+    )
 
 
 class ChildOfReferer(ParentWithFK):
     pass
 
 
-class M2MReference(models.Model):
-    ref = models.ManyToManyField('self')
-
-
 # Models for #23431
 class ReferencedByInline(models.Model):
-    pass
+    name = models.CharField(max_length=20, unique=True)
 
 
 class InlineReference(models.Model):
-    fk = models.ForeignKey(ReferencedByInline, related_name='hidden+')
+    fk = models.ForeignKey(
+        ReferencedByInline, to_field='name', related_name='hidden+',
+    )
 
 
 class InlineReferer(models.Model):
     refs = models.ManyToManyField(InlineReference)
 
 
-# Models for #23604
+# Models for #23604 and #23915
 class Recipe(models.Model):
-    name = models.CharField(max_length=20)
+    rname = models.CharField(max_length=20, unique=True)
 
 
 class Ingredient(models.Model):
-    name = models.CharField(max_length=20)
-    recipes = models.ManyToManyField('Recipe', related_name='ingredients')
+    iname = models.CharField(max_length=20, unique=True)
+    recipes = models.ManyToManyField(Recipe, through='RecipeIngredient')
+
+
+class RecipeIngredient(models.Model):
+    ingredient = models.ForeignKey(Ingredient, to_field='iname')
+    recipe = models.ForeignKey(Recipe, to_field='rname')
+
+
+# Model for #23839
+class NotReferenced(models.Model):
+    # Don't point any FK at this model.
+    pass
+
+
+# Models for #23934
+class ExplicitlyProvidedPK(models.Model):
+    name = models.IntegerField(primary_key=True)
+
+
+class ImplicitlyGeneratedPK(models.Model):
+    name = models.IntegerField(unique=True)
+
+
+# Models for #25622
+class ReferencedByGenRel(models.Model):
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    content_object = GenericForeignKey('content_type', 'object_id')
+
+
+class GenRelReference(models.Model):
+    references = GenericRelation(ReferencedByGenRel)
+
+
+class ParentWithUUIDPK(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.CharField(max_length=100)
+
+    def __str__(self):
+        return str(self.id)
+
+
+class RelatedWithUUIDPKModel(models.Model):
+    parent = models.ForeignKey(ParentWithUUIDPK, on_delete=models.CASCADE)

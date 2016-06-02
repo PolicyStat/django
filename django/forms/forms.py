@@ -4,22 +4,23 @@ Form classes
 
 from __future__ import unicode_literals
 
-from collections import OrderedDict
 import copy
 import datetime
 import warnings
+from collections import OrderedDict
 
-from django.core.exceptions import ValidationError, NON_FIELD_ERRORS
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.forms.fields import Field, FileField
-from django.forms.utils import flatatt, ErrorDict, ErrorList
-from django.forms.widgets import Media, MediaDefiningClass, TextInput, Textarea
+from django.forms.utils import ErrorDict, ErrorList, flatatt
+from django.forms.widgets import Media, MediaDefiningClass, Textarea, TextInput
+from django.utils import six
 from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.encoding import smart_text, force_text, python_2_unicode_compatible
-from django.utils.html import conditional_escape, format_html
+from django.utils.encoding import (
+    force_text, python_2_unicode_compatible, smart_text,
+)
+from django.utils.html import conditional_escape, format_html, html_safe
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext as _
-from django.utils import six
-
 
 __all__ = ('BaseForm', 'Form')
 
@@ -29,6 +30,8 @@ def pretty_name(name):
     if not name:
         return ''
     return name.replace('_', ' ').capitalize()
+
+UNSET = object()
 
 
 def get_declared_fields(bases, attrs, with_base_fields=True):
@@ -105,6 +108,7 @@ class DeclarativeFieldsMetaclass(MediaDefiningClass):
         return new_class
 
 
+@html_safe
 @python_2_unicode_compatible
 class BaseForm(object):
     # This is the main implementation of all the Form logic. Note that this
@@ -133,6 +137,7 @@ class BaseForm(object):
         # Instances should always modify self.fields; they should not modify
         # self.base_fields.
         self.fields = copy.deepcopy(self.base_fields)
+        self._bound_fields_cache = {}
 
     def __str__(self):
         return self.as_table()
@@ -160,7 +165,9 @@ class BaseForm(object):
         except KeyError:
             raise KeyError(
                 "Key %r not found in '%s'" % (name, self.__class__.__name__))
-        return BoundField(self, field, name)
+        if name not in self._bound_fields_cache:
+            self._bound_fields_cache[name] = BoundField(self, field, name)
+        return self._bound_fields_cache[name]
 
     @property
     def errors(self):
@@ -251,9 +258,14 @@ class BaseForm(object):
                     # that users write): if there are only top errors, we may
                     # not be able to conscript the last row for our purposes,
                     # so insert a new, empty row.
-                    last_row = (normal_row % {'errors': '', 'label': '',
-                                              'field': '', 'help_text': '',
-                                              'html_class_attr': html_class_attr})
+                    last_row = (normal_row % {
+                        'errors': '',
+                        'label': '',
+                        'field': '',
+                        'help_text': '',
+                        'html_class_attr': html_class_attr,
+                        'field_name': '',
+                    })
                     output.append(last_row)
                 output[-1] = last_row[:-len(row_ender)] + str_hidden + row_ender
             else:
@@ -435,12 +447,6 @@ class BaseForm(object):
     def changed_data(self):
         if self._changed_data is None:
             self._changed_data = []
-            # XXX: For now we're asking the individual fields whether or not the
-            # data has changed. It would probably be more efficient to hash the
-            # initial data, store it in a hidden field, and compare a hash of the
-            # submitted data, but we'd need a way to easily get the string value
-            # for a given field. Right now, that logic is embedded in the render
-            # method of each widget.
             for name, field in self.fields.items():
                 prefixed_name = self.add_prefix(name)
                 data_value = field.widget.value_from_datadict(self.data, self.files, prefixed_name)
@@ -506,6 +512,7 @@ class Form(six.with_metaclass(DeclarativeFieldsMetaclass, BaseForm)):
     # BaseForm itself has no way of designating self.fields.
 
 
+@html_safe
 @python_2_unicode_compatible
 class BoundField(object):
     "A Field plus data"
@@ -521,6 +528,7 @@ class BoundField(object):
         else:
             self.label = self.field.label
         self.help_text = field.help_text or ''
+        self._initial_value = UNSET
 
     def __str__(self):
         """Renders this field as an HTML widget."""
@@ -546,7 +554,7 @@ class BoundField(object):
     def __getitem__(self, idx):
         # Prevent unnecessary reevaluation when accessing BoundField's attrs
         # from templates.
-        if not isinstance(idx, six.integer_types):
+        if not isinstance(idx, six.integer_types + (slice,)):
             raise TypeError
         return list(self.__iter__())[idx]
 
@@ -615,12 +623,16 @@ class BoundField(object):
         if not self.form.is_bound:
             data = self.form.initial.get(self.name, self.field.initial)
             if callable(data):
-                data = data()
-                # If this is an auto-generated default date, nix the
-                # microseconds for standardized handling. See #22502.
-                if (isinstance(data, (datetime.datetime, datetime.time)) and
-                        not getattr(self.field.widget, 'supports_microseconds', True)):
-                    data = data.replace(microsecond=0)
+                if self._initial_value is not UNSET:
+                    data = self._initial_value
+                else:
+                    data = data()
+                    # If this is an auto-generated default date, nix the
+                    # microseconds for standardized handling. See #22502.
+                    if (isinstance(data, (datetime.datetime, datetime.time)) and
+                            not getattr(self.field.widget, 'supports_microseconds', True)):
+                        data = data.replace(microsecond=0)
+                    self._initial_value = data
         else:
             data = self.field.bound_data(
                 self.data, self.form.initial.get(self.name, self.field.initial)
@@ -645,7 +657,7 @@ class BoundField(object):
         # Translators: If found as last label character, these punctuation
         # characters will prevent the default label_suffix to be appended to the label
         if label_suffix and contents and contents[-1] not in _(':?.!'):
-            contents = format_html('{0}{1}', contents, label_suffix)
+            contents = format_html('{}{}', contents, label_suffix)
         widget = self.field.widget
         id_ = widget.attrs.get('id') or self.auto_id
         if id_:
@@ -659,7 +671,7 @@ class BoundField(object):
                 else:
                     attrs['class'] = self.form.required_css_class
             attrs = flatatt(attrs) if attrs else ''
-            contents = format_html('<label{0}>{1}</label>', attrs, contents)
+            contents = format_html('<label{}>{}</label>', attrs, contents)
         else:
             contents = conditional_escape(contents)
         return mark_safe(contents)

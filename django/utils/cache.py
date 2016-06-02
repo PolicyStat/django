@@ -24,7 +24,7 @@ import time
 
 from django.conf import settings
 from django.core.cache import caches
-from django.utils.encoding import iri_to_uri, force_bytes, force_text
+from django.utils.encoding import force_bytes, force_text, iri_to_uri
 from django.utils.http import http_date
 from django.utils.timezone import get_current_timezone_name
 from django.utils.translation import get_language
@@ -134,6 +134,7 @@ def add_never_cache_headers(response):
     Adds headers to a response to indicate that a page should never be cached.
     """
     patch_response_headers(response, cache_timeout=-1)
+    patch_cache_control(response, no_cache=True, no_store=True, must_revalidate=True)
 
 
 def patch_vary_headers(response, newheaders):

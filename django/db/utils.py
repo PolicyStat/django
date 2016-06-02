@@ -1,23 +1,26 @@
-from importlib import import_module
+import inspect
 import os
 import pkgutil
-from threading import local
 import warnings
+from importlib import import_module
+from threading import local
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.functional import cached_property
-from django.utils.module_loading import import_string
-from django.utils._os import upath
 from django.utils import six
-
+from django.utils._os import upath
+from django.utils.deprecation import (
+    RemovedInDjango19Warning, RemovedInDjango110Warning,
+)
+from django.utils.functional import cached_property
+from django.utils.inspect import HAS_INSPECT_SIGNATURE
+from django.utils.module_loading import import_string
 
 DEFAULT_DB_ALIAS = 'default'
 DJANGO_VERSION_PICKLE_KEY = '_django_version'
 
 
-class Error(Exception if six.PY3 else StandardError):
+class Error(Exception if six.PY3 else StandardError):  # NOQA: StandardError undefined on PY3
     pass
 
 
@@ -212,7 +215,7 @@ class ConnectionHandler(object):
             else:
                 test_settings.update(old_test_settings)
                 for key, _ in six.iteritems(old_test_settings):
-                    warnings.warn("In Django 1.9 the %s connection setting will be moved "
+                    warnings.warn("In Django 1.9 the TEST_%s connection setting will be moved "
                                   "to a %s entry in the TEST setting" %
                                   (self.TEST_SETTING_RENAMES_REVERSE.get(key, key), key),
                                   RemovedInDjango19Warning, stacklevel=2)
@@ -251,6 +254,14 @@ class ConnectionHandler(object):
 
     def all(self):
         return [self[alias] for alias in self]
+
+    def close_all(self):
+        for alias in self:
+            try:
+                connection = getattr(self._connections, alias)
+            except AttributeError:
+                continue
+            connection.close()
 
 
 class ConnectionRouter(object):
@@ -308,29 +319,62 @@ class ConnectionRouter(object):
                     return allow
         return obj1._state.db == obj2._state.db
 
-    def allow_migrate(self, db, model):
+    def allow_migrate(self, db, app_label, **hints):
         for router in self.routers:
             try:
                 try:
                     method = router.allow_migrate
                 except AttributeError:
                     method = router.allow_syncdb
+                    has_deprecated_signature = True
                     warnings.warn(
                         'Router.allow_syncdb has been deprecated and will stop working in Django 1.9. '
                         'Rename the method to allow_migrate.',
                         RemovedInDjango19Warning, stacklevel=2)
+                else:
+                    if HAS_INSPECT_SIGNATURE:
+                        sig = inspect.signature(method)
+                        has_deprecated_signature = not any(
+                            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+                        )
+                    else:
+                        argspec = inspect.getargspec(method)
+                        has_deprecated_signature = len(argspec.args) == 3 and not argspec.keywords
+                    if has_deprecated_signature:
+                        # Raised here because allow_syncdb has to be called with
+                        # the deprecated signature but shouldn't show this
+                        # warning (only the deprecated method one)
+                        warnings.warn(
+                            "The signature of allow_migrate has changed from "
+                            "allow_migrate(self, db, model) to "
+                            "allow_migrate(self, db, app_label, model_name=None, **hints). "
+                            "Support for the old signature will be removed in Django 1.10.",
+                            RemovedInDjango110Warning)
             except AttributeError:
                 # If the router doesn't have a method, skip to the next one.
-                pass
+                continue
+
+            if has_deprecated_signature:
+                model = hints.get('model')
+                allow = None if model is None else method(db, model)
             else:
-                allow = method(db, model)
-                if allow is not None:
-                    return allow
+                allow = method(db, app_label, **hints)
+
+            if allow is not None:
+                return allow
         return True
+
+    def allow_migrate_model(self, db, model):
+        return self.allow_migrate(
+            db,
+            model._meta.app_label,
+            model_name=model._meta.model_name,
+            model=model,
+        )
 
     def get_migratable_models(self, app_config, db, include_auto_created=False):
         """
         Return app models allowed to be synchronized on provided db.
         """
         models = app_config.get_models(include_auto_created=include_auto_created)
-        return [model for model in models if self.allow_migrate(db, model)]
+        return [model for model in models if self.allow_migrate_model(db, model)]

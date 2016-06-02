@@ -5,14 +5,17 @@ Tests for stuff in django.utils.datastructures.
 import copy
 import pickle
 
-from django.test import SimpleTestCase
-from django.test.utils import IgnoreDeprecationWarningsMixin
-from django.utils.datastructures import (DictWrapper, ImmutableList,
-    MultiValueDict, MultiValueDictKeyError, MergeDict, OrderedSet, SortedDict)
+from django.test import SimpleTestCase, ignore_warnings
 from django.utils import six
+from django.utils.datastructures import (
+    DictWrapper, ImmutableList, MergeDict, MultiValueDict,
+    MultiValueDictKeyError, OrderedSet, SortedDict,
+)
+from django.utils.deprecation import RemovedInDjango19Warning
 
 
-class SortedDictTests(IgnoreDeprecationWarningsMixin, SimpleTestCase):
+@ignore_warnings(category=RemovedInDjango19Warning)
+class SortedDictTests(SimpleTestCase):
     def setUp(self):
         super(SortedDictTests, self).setUp()
         self.d1 = SortedDict()
@@ -136,7 +139,8 @@ class SortedDictTests(IgnoreDeprecationWarningsMixin, SimpleTestCase):
         self.assertEqual(list(reversed(self.d2)), [7, 0, 9, 1])
 
 
-class MergeDictTests(IgnoreDeprecationWarningsMixin, SimpleTestCase):
+@ignore_warnings(category=RemovedInDjango19Warning)
+class MergeDictTests(SimpleTestCase):
 
     def test_simple_mergedict(self):
         d1 = {'chris': 'cool', 'camri': 'cute', 'cotton': 'adorable',

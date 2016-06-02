@@ -59,6 +59,14 @@ subclass for that application.
 If there is no ``default_app_config``, Django uses the base
 :class:`~django.apps.AppConfig` class.
 
+``default_app_config`` allows applications that predate Django 1.7 such as
+``django.contrib.admin`` to opt-in to :class:`~django.apps.AppConfig` features
+without requiring users to update their :setting:`INSTALLED_APPS`.
+
+New applications should avoid ``default_app_config``. Instead they should
+require the dotted path to the appropriate :class:`~django.apps.AppConfig`
+subclass to be configured explicitly in :setting:`INSTALLED_APPS`.
+
 For application authors
 -----------------------
 
@@ -204,13 +212,14 @@ Methods
 
 .. method:: AppConfig.get_models()
 
-    Returns an iterable of :class:`~django.db.models.Model` classes.
+    Returns an iterable of :class:`~django.db.models.Model` classes for this
+    application.
 
 .. method:: AppConfig.get_model(model_name)
 
     Returns the :class:`~django.db.models.Model` with the given
-    ``model_name``. Raises :exc:`LookupError` if no such model exists.
-    ``model_name`` is case-insensitive.
+    ``model_name``. Raises :exc:`LookupError` if no such model exists in this
+    application. ``model_name`` is case-insensitive.
 
 .. method:: AppConfig.ready()
 
@@ -243,7 +252,7 @@ Methods
         In the usual initialization process, the ``ready`` method is only called
         once by Django. But in some corner cases, particularly in tests which
         are fiddling with installed applications, ``ready`` might be called more
-        than once. In that case, either write idempotents methods, or put a flag
+        than once. In that case, either write idempotent methods, or put a flag
         on your ``AppConfig`` classes to prevent re-running code which should
         be executed exactly one time.
 
@@ -361,7 +370,7 @@ processes all applications in the order of :setting:`INSTALLED_APPS`.
    the order of :setting:`INSTALLED_APPS`, it's strongly recommended not
    import any models at this stage.
 
-   Once this stage completes, APIs that operate of application configurations
+   Once this stage completes, APIs that operate on application configurations
    such as :meth:`~apps.get_app_config()` become usable.
 
 #. Then Django attempts to import the ``models`` submodule of each application,

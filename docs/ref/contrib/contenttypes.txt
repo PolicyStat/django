@@ -59,7 +59,7 @@ The ``ContentType`` model
 .. class:: ContentType
 
     Each instance of :class:`~django.contrib.contenttypes.models.ContentType`
-    has three fields which, taken together, uniquely describe an installed
+    has two fields which, taken together, uniquely describe an installed
     model:
 
     .. attribute:: app_label
@@ -74,11 +74,18 @@ The ``ContentType`` model
 
         The name of the model class.
 
+    Additionally, the following property is available:
+
     .. attribute:: name
 
-        The human-readable name of the model. This is taken from the
+        The human-readable name of the content type. This is taken from the
         :attr:`verbose_name <django.db.models.Field.verbose_name>`
         attribute of the model.
+
+.. versionchanged:: 1.8
+
+    Before Django 1.8, the ``name`` property was a real field on the
+    ``ContentType`` model.
 
 Let's look at an example to see how this works. If you already have
 the :mod:`~django.contrib.contenttypes` application installed, and then add
@@ -94,9 +101,6 @@ created with the following values:
   path "django.contrib.sites").
 
 * :attr:`~django.contrib.contenttypes.models.ContentType.model`
-  will be set to ``'site'``.
-
-* :attr:`~django.contrib.contenttypes.models.ContentType.name`
   will be set to ``'site'``.
 
 .. _the verbose_name attribute: ../model-api/#verbose_name
@@ -192,7 +196,7 @@ The ``ContentTypeManager``
         it's preferred to use this method over the usual
         ``ContentType.objects.get(pk=id)``
 
-    .. method:: get_for_model(model[, for_concrete_model=True])
+    .. method:: get_for_model(model, for_concrete_model=True)
 
         Takes either a model class or an instance of a model, and returns the
         :class:`~django.contrib.contenttypes.models.ContentType` instance
@@ -200,7 +204,7 @@ The ``ContentTypeManager``
         the :class:`~django.contrib.contenttypes.models.ContentType` of a proxy
         model.
 
-    .. method:: get_for_models(*models[, for_concrete_models=True])
+    .. method:: get_for_models(*models, for_concrete_models=True)
 
         Takes a variadic number of model classes, and returns a dictionary
         mapping the model classes to the
@@ -295,10 +299,11 @@ model:
        is ``True``. This mirrors the ``for_concrete_model`` argument to
        :meth:`~django.contrib.contenttypes.models.ContentTypeManager.get_for_model`.
 
-    .. versionchanged:: 1.7
+    .. deprecated:: 1.7
 
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
-
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.fields``. Support for importing from the
+        old location will be removed in Django 1.9.
 
 .. admonition:: Primary key type compatibility
 
@@ -330,7 +335,8 @@ model:
    generic relations, you should probably be using a natural key to uniquely
    identify related :class:`~django.contrib.contenttypes.models.ContentType`
    objects. See :ref:`natural keys<topics-serialization-natural-keys>` and
-   :djadminopt:`dumpdata --natural <--natural>` for more information.
+   :djadminopt:`dumpdata --natural-foreign <--natural-foreign>` for more
+   information.
 
 This will enable an API similar to the one used for a normal
 :class:`~django.db.models.ForeignKey`;
@@ -364,10 +370,6 @@ Reverse generic relations
 
 .. class:: GenericRelation
 
-    .. versionchanged:: 1.7
-
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
-
     .. attribute:: related_query_name
 
         .. versionadded:: 1.7
@@ -377,8 +379,17 @@ Reverse generic relations
         related object back to this one. This allows querying and filtering
         from the related object.
 
+    .. deprecated:: 1.7
+
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.fields``. Support for importing from the
+        old location will be removed in Django 1.9.
+
 If you know which models you'll be using most often, you can also add
 a "reverse" generic relationship to enable an additional API. For example::
+
+    from django.db import models
+    from django.contrib.contenttypes.fields import GenericRelation
 
     class Bookmark(models.Model):
         url = models.URLField()
@@ -464,19 +475,12 @@ signal.
 Generic relations and aggregation
 ---------------------------------
 
-:doc:`Django's database aggregation API </topics/db/aggregation>`
-doesn't work with a
+:doc:`Django's database aggregation API </topics/db/aggregation>` works with a
 :class:`~django.contrib.contenttypes.fields.GenericRelation`. For example, you
-might be tempted to try something like::
+can find out how many tags all the bookmarks have::
 
-    Bookmark.objects.aggregate(Count('tags'))
-
-This will not work correctly, however. The generic relation adds extra filters
-to the queryset to ensure the correct content type, but the
-:meth:`~django.db.models.query.QuerySet.aggregate` method doesn't take them
-into account. For now, if you need aggregates on generic relations, you'll
-need to calculate them without using the aggregation API.
-
+    >>> Bookmark.objects.aggregate(Count('tags'))
+    {'tags__count': 3}
 
 .. module:: django.contrib.contenttypes.forms
 
@@ -491,9 +495,11 @@ The :mod:`django.contrib.contenttypes.forms` module provides:
 
 .. class:: BaseGenericInlineFormSet
 
-    .. versionchanged:: 1.7
+    .. deprecated:: 1.7
 
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.forms``. Support for importing from the
+        old location will be removed in Django 1.9.
 
 .. function:: generic_inlineformset_factory(model, form=ModelForm, formset=BaseGenericInlineFormSet, ct_field="content_type", fk_field="object_id", fields=None, exclude=None, extra=3, can_order=False, can_delete=True, max_num=None, formfield_callback=None, validate_max=False, for_concrete_model=True, min_num=None, validate_min=False)
 
@@ -510,14 +516,15 @@ The :mod:`django.contrib.contenttypes.forms` module provides:
     :class:`~django.contrib.contenttypes.fields.GenericForeignKey.for_concrete_model`
     argument on ``GenericForeignKey``.
 
-    .. versionchanged:: 1.7
+    .. deprecated:: 1.7
 
-        This function used to be defined in ``django.contrib.contenttypes.generic``.
+        This function was moved from ``django.contrib.contenttypes.generic``
+        to ``django.contrib.contenttypes.forms``. Support for importing from
+        the old location will be removed in Django 1.9.
 
     .. versionchanged:: 1.7
 
         ``min_num`` and ``validate_min`` were added.
-
 
 .. module:: django.contrib.contenttypes.admin
 
@@ -552,9 +559,11 @@ information.
         The name of the integer field that represents the ID of the related
         object. Defaults to ``object_id``.
 
-    .. versionchanged:: 1.7
+    .. deprecated:: 1.7
 
-        This class used to be defined in ``django.contrib.contenttypes.generic``.
+        This class was moved from ``django.contrib.contenttypes.generic`` to
+        ``django.contrib.contenttypes.admin``. Support for importing from the
+        old location will be removed in Django 1.9.
 
 .. class:: GenericTabularInline
 .. class:: GenericStackedInline
@@ -562,6 +571,8 @@ information.
     Subclasses of :class:`GenericInlineModelAdmin` with stacked and tabular
     layouts, respectively.
 
-    .. versionchanged:: 1.7
+    .. deprecated:: 1.7
 
-        These classes used to be defined in ``django.contrib.contenttypes.generic``.
+        These classes was moved from ``django.contrib.contenttypes.generic``
+        to ``django.contrib.contenttypes.admin``. Support for importing from
+        the old location will be removed in Django 1.9.

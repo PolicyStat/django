@@ -1,7 +1,5 @@
 from __future__ import unicode_literals
 
-import warnings
-
 from django.db import models
 from django.test import TestCase, override_settings
 from django.utils import six
@@ -70,6 +68,13 @@ class FieldDeconstructionTests(TestCase):
         self.assertEqual(path, "django.db.models.CharField")
         self.assertEqual(args, [])
         self.assertEqual(kwargs, {"max_length": 65, "null": True, "blank": True})
+
+    def test_char_field_choices(self):
+        field = models.CharField(max_length=1, choices=(("A", "One"), ("B", "Two")))
+        name, path, args, kwargs = field.deconstruct()
+        self.assertEqual(path, "django.db.models.CharField")
+        self.assertEqual(args, [])
+        self.assertEqual(kwargs, {"choices": [("A", "One"), ("B", "Two")], "max_length": 1})
 
     def test_csi_field(self):
         field = models.CommaSeparatedIntegerField(max_length=100)
@@ -211,12 +216,6 @@ class FieldDeconstructionTests(TestCase):
         self.assertEqual(path, "django.db.models.ForeignKey")
         self.assertEqual(args, [])
         self.assertEqual(kwargs, {"to": "auth.Permission", "related_name": "foobar"})
-        # Test related_name unicode conversion
-        field = models.ForeignKey("auth.Permission", related_name=b"foobar")
-        name, path, args, kwargs = field.deconstruct()
-        self.assertEqual(path, "django.db.models.ForeignKey")
-        self.assertEqual(args, [])
-        self.assertEqual(kwargs, {"to": "auth.Permission", "related_name": "foobar"})
 
     @override_settings(AUTH_USER_MODEL="auth.Permission")
     def test_foreign_key_swapped(self):
@@ -244,9 +243,7 @@ class FieldDeconstructionTests(TestCase):
         self.assertEqual(kwargs, {})
 
     def test_ip_address_field(self):
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            field = models.IPAddressField()
+        field = models.IPAddressField()
         name, path, args, kwargs = field.deconstruct()
         self.assertEqual(path, "django.db.models.IPAddressField")
         self.assertEqual(args, [])
@@ -293,12 +290,6 @@ class FieldDeconstructionTests(TestCase):
         self.assertEqual(kwargs, {"to": "auth.Permission", "db_table": "custom_table"})
         # Test related_name
         field = models.ManyToManyField("auth.Permission", related_name="custom_table")
-        name, path, args, kwargs = field.deconstruct()
-        self.assertEqual(path, "django.db.models.ManyToManyField")
-        self.assertEqual(args, [])
-        self.assertEqual(kwargs, {"to": "auth.Permission", "related_name": "custom_table"})
-        # Test related_name unicode conversion
-        field = models.ManyToManyField("auth.Permission", related_name=b"custom_table")
         name, path, args, kwargs = field.deconstruct()
         self.assertEqual(path, "django.db.models.ManyToManyField")
         self.assertEqual(args, [])

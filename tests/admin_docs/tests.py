@@ -2,14 +2,15 @@ import sys
 import unittest
 
 from django.conf import settings
-from django.contrib.sites.models import Site
 from django.contrib.admindocs import utils
 from django.contrib.admindocs.views import get_return_data_type
 from django.contrib.auth.models import User
+from django.contrib.sites.models import Site
 from django.core.urlresolvers import reverse
 from django.test import TestCase, modify_settings, override_settings
+from django.test.utils import captured_stderr
 
-from .models import Person, Company
+from .models import Company, Person
 
 
 @override_settings(
@@ -210,9 +211,8 @@ class TestModelDetailView(AdminDocsTestCase):
 
     def setUp(self):
         self.client.login(username='super', password='secret')
-        self.response = self.client.get(
-            reverse('django-admindocs-models-detail',
-                    args=['admin_docs', 'person']))
+        with captured_stderr() as self.docutils_stderr:
+            self.response = self.client.get(reverse('django-admindocs-models-detail', args=['admin_docs', 'person']))
 
     def test_method_excludes(self):
         """
@@ -278,6 +278,29 @@ class TestModelDetailView(AdminDocsTestCase):
         self.assertContains(
             self.response,
             "all related %s objects" % (link % ("admin_docs.group", "admin_docs.Group"))
+        )
+
+        # "raw" and "include" directives are disabled
+        self.assertContains(self.response, '<p>&quot;raw&quot; directive disabled.</p>',)
+        self.assertContains(self.response, '.. raw:: html\n    :file: admin_docs/evilfile.txt')
+        self.assertContains(self.response, '<p>&quot;include&quot; directive disabled.</p>',)
+        self.assertContains(self.response, '.. include:: admin_docs/evilfile.txt')
+        out = self.docutils_stderr.getvalue()
+        self.assertIn('"raw" directive disabled', out)
+        self.assertIn('"include" directive disabled', out)
+
+    def test_model_with_many_to_one(self):
+        link = '<a class="reference external" href="/admindocs/models/%s/">%s</a>'
+        response = self.client.get(
+            reverse('django-admindocs-models-detail', args=['admin_docs', 'company'])
+        )
+        self.assertContains(
+            response,
+            "number of related %s objects" % (link % ("admin_docs.person", "admin_docs.Person"))
+        )
+        self.assertContains(
+            response,
+            "all related %s objects" % (link % ("admin_docs.person", "admin_docs.Person"))
         )
 
     def test_model_with_no_backward_relations_render_only_relevant_fields(self):

@@ -118,7 +118,7 @@ into those elements.
   both.
 
   If you want to do any special formatting for either the title or
-  description, :doc:`Django templates </topics/templates>` can be used
+  description, :doc:`Django templates </ref/templates/language>` can be used
   instead. Their paths can be specified with the ``title_template`` and
   ``description_template`` attributes on the
   :class:`~django.contrib.syndication.views.Feed` class. The templates are
@@ -224,14 +224,13 @@ method along with the request object.
 
 Here's the code for these beat-specific feeds::
 
-    from django.contrib.syndication.views import FeedDoesNotExist
-    from django.shortcuts import get_object_or_404
+    from django.contrib.syndication.views import Feed
 
     class BeatFeed(Feed):
         description_template = 'feeds/beat_description.html'
 
         def get_object(self, request, beat_id):
-            return get_object_or_404(Beat, pk=beat_id)
+            return Beat.objects.get(pk=beat_id)
 
         def title(self, obj):
             return "Police beat central: Crimes for beat %s" % obj.beat
@@ -824,7 +823,7 @@ This example illustrates all possible attributes and methods for a
 
         def item_updateddate(self):
             """
-            Returns the updateddated for every item in the feed.
+            Returns the updateddate for every item in the feed.
             """
 
         item_updateddate = datetime.datetime(2005, 5, 3) # Hard-coded updateddate.

@@ -5,8 +5,11 @@ from operator import attrgetter
 
 from django.test import TestCase
 
-from .models import (Person, Group, Membership, CustomMembership,
-    PersonSelfRefM2M, Friendship, Event, Invitation, Employee, Relationship)
+from .models import (
+    CustomMembership, Employee, Event, Friendship, Group, Ingredient,
+    Invitation, Membership, Person, PersonSelfRefM2M, Recipe, RecipeIngredient,
+    Relationship,
+)
 
 
 class M2mThroughTests(TestCase):
@@ -343,7 +346,7 @@ class M2mThroughReferentialTests(TestCase):
             []
         )
 
-    def test_self_referential_non_symmentrical_first_side(self):
+    def test_self_referential_non_symmetrical_first_side(self):
         tony = PersonSelfRefM2M.objects.create(name="Tony")
         chris = PersonSelfRefM2M.objects.create(name="Chris")
         Friendship.objects.create(
@@ -356,7 +359,7 @@ class M2mThroughReferentialTests(TestCase):
             attrgetter("name")
         )
 
-    def test_self_referential_non_symmentrical_second_side(self):
+    def test_self_referential_non_symmetrical_second_side(self):
         tony = PersonSelfRefM2M.objects.create(name="Tony")
         chris = PersonSelfRefM2M.objects.create(name="Chris")
         Friendship.objects.create(
@@ -368,7 +371,7 @@ class M2mThroughReferentialTests(TestCase):
             []
         )
 
-    def test_self_referential_non_symmentrical_clear_first_side(self):
+    def test_self_referential_non_symmetrical_clear_first_side(self):
         tony = PersonSelfRefM2M.objects.create(name="Tony")
         chris = PersonSelfRefM2M.objects.create(name="Chris")
         Friendship.objects.create(
@@ -389,7 +392,7 @@ class M2mThroughReferentialTests(TestCase):
             attrgetter("name")
         )
 
-    def test_self_referential_symmentrical(self):
+    def test_self_referential_symmetrical(self):
         tony = PersonSelfRefM2M.objects.create(name="Tony")
         chris = PersonSelfRefM2M.objects.create(name="Chris")
         Friendship.objects.create(
@@ -425,4 +428,31 @@ class M2mThroughReferentialTests(TestCase):
             john.subordinates.all(),
             ['peter', 'mary', 'harry'],
             attrgetter('name')
+        )
+
+
+class M2mThroughToFieldsTests(TestCase):
+    def setUp(self):
+        self.pea = Ingredient.objects.create(iname='pea')
+        self.potato = Ingredient.objects.create(iname='potato')
+        self.tomato = Ingredient.objects.create(iname='tomato')
+        self.curry = Recipe.objects.create(rname='curry')
+        RecipeIngredient.objects.create(recipe=self.curry, ingredient=self.potato)
+        RecipeIngredient.objects.create(recipe=self.curry, ingredient=self.pea)
+        RecipeIngredient.objects.create(recipe=self.curry, ingredient=self.tomato)
+
+    def test_retrieval(self):
+        # Forward retrieval
+        self.assertQuerysetEqual(
+            self.curry.ingredients.all(),
+            [self.pea, self.potato, self.tomato], lambda x: x
+        )
+        # Backward retrieval
+        self.assertEqual(self.tomato.recipes.get(), self.curry)
+
+    def test_choices(self):
+        field = Recipe._meta.get_field('ingredients')
+        self.assertEqual(
+            [choice[0] for choice in field.get_choices(include_blank=False)],
+            ['pea', 'potato', 'tomato']
         )

@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-from io import BytesIO, StringIO
-import os
 import gzip
+import os
 import tempfile
 import unittest
 import zlib
+from io import BytesIO, StringIO
 
 from django.core.files import File
-from django.core.files.move import file_move_safe
 from django.core.files.base import ContentFile
-from django.core.files.uploadedfile import SimpleUploadedFile, UploadedFile
+from django.core.files.move import file_move_safe
 from django.core.files.temp import NamedTemporaryFile
-from django.utils._os import upath
+from django.core.files.uploadedfile import SimpleUploadedFile, UploadedFile
 from django.utils import six
+from django.utils._os import upath
 
 try:
     from PIL import Image
@@ -26,13 +26,12 @@ else:
 
 class FileTests(unittest.TestCase):
     def test_unicode_uploadedfile_name(self):
-        """
-        Regression test for #8156: files with unicode names I can't quite figure
-        out the encoding situation between doctest and this file, but the actual
-        repr doesn't matter; it just shouldn't return a unicode object.
-        """
         uf = UploadedFile(name='¿Cómo?', content_type='text')
-        self.assertEqual(type(uf.__repr__()), str)
+        self.assertIs(type(repr(uf)), str)
+
+    def test_unicode_file_name(self):
+        f = File(None, 'djángö')
+        self.assertIs(type(repr(f)), str)
 
     def test_context_manager(self):
         orig_file = tempfile.TemporaryFile()
@@ -242,8 +241,8 @@ class InconsistentGetImageDimensionsBug(unittest.TestCase):
 
 class FileMoveSafeTests(unittest.TestCase):
     def test_file_move_overwrite(self):
-        handle_a, self.file_a = tempfile.mkstemp(dir=os.environ['DJANGO_TEST_TEMP_DIR'])
-        handle_b, self.file_b = tempfile.mkstemp(dir=os.environ['DJANGO_TEST_TEMP_DIR'])
+        handle_a, self.file_a = tempfile.mkstemp()
+        handle_b, self.file_b = tempfile.mkstemp()
 
         # file_move_safe should raise an IOError exception if destination file exists and allow_overwrite is False
         self.assertRaises(IOError, lambda: file_move_safe(self.file_a, self.file_b, allow_overwrite=False))

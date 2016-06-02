@@ -1,15 +1,18 @@
 import datetime
 import os
+import warnings
 
 from django import forms
-from django.db.models.fields import Field
 from django.core import checks
 from django.core.files.base import File
-from django.core.files.storage import default_storage
 from django.core.files.images import ImageFile
+from django.core.files.storage import default_storage
 from django.db.models import signals
-from django.utils.encoding import force_str, force_text
+from django.db.models.fields import Field
 from django.utils import six
+from django.utils.deprecation import RemovedInDjango110Warning
+from django.utils.encoding import force_str, force_text
+from django.utils.inspect import func_supports_parameter
 from django.utils.translation import ugettext_lazy as _
 
 
@@ -85,7 +88,18 @@ class FieldFile(File):
 
     def save(self, name, content, save=True):
         name = self.field.generate_filename(self.instance, name)
-        self.name = self.storage.save(name, content)
+
+        if func_supports_parameter(self.storage.save, 'max_length'):
+            self.name = self.storage.save(name, content, max_length=self.field.max_length)
+        else:
+            warnings.warn(
+                'Backwards compatibility for storage backends without '
+                'support for the `max_length` argument in '
+                'Storage.save() will be removed in Django 1.10.',
+                RemovedInDjango110Warning, stacklevel=2
+            )
+            self.name = self.storage.save(name, content)
+
         setattr(self.instance, self.field.name, self.name)
 
         # Update the filesize cache
@@ -149,7 +163,7 @@ class FileDescriptor(object):
 
     Assigns a file object on assignment so you can do::
 
-        >>> with open('/tmp/hello.world', 'r') as f:
+        >>> with open('/path/to/hello.world', 'r') as f:
         ...     instance.file = File(f)
 
     """
@@ -188,7 +202,7 @@ class FileDescriptor(object):
             instance.__dict__[self.field.name] = attr
 
         # Other types of files may be assigned as well, but they need to have
-        # the FieldFile interface added to the. Thus, we wrap any other type of
+        # the FieldFile interface added to them. Thus, we wrap any other type of
         # File inside a FieldFile (well, the field's attr_class, which is
         # usually FieldFile).
         elif isinstance(file, File) and not isinstance(file, FieldFile):

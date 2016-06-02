@@ -5,6 +5,7 @@ import gzip
 import os
 import warnings
 import zipfile
+from itertools import product
 
 from django.apps import apps
 from django.conf import settings
@@ -12,14 +13,15 @@ from django.core import serializers
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import BaseCommand, CommandError
 from django.core.management.color import no_style
-from django.db import (connections, router, transaction, DEFAULT_DB_ALIAS,
-      IntegrityError, DatabaseError)
+from django.db import (
+    DEFAULT_DB_ALIAS, DatabaseError, IntegrityError, connections, router,
+    transaction,
+)
 from django.utils import lru_cache
-from django.utils.encoding import force_text
-from django.utils.functional import cached_property
 from django.utils._os import upath
 from django.utils.deprecation import RemovedInDjango19Warning
-from itertools import product
+from django.utils.encoding import force_text
+from django.utils.functional import cached_property
 
 try:
     import bz2
@@ -83,6 +85,16 @@ class Command(BaseCommand):
         if has_bz2:
             self.compression_formats['bz2'] = (bz2.BZ2File, 'r')
 
+        # Django's test suite repeatedly tries to load initial_data fixtures
+        # from apps that don't have any fixtures. Because disabling constraint
+        # checks can be expensive on some database (especially MSSQL), bail
+        # out early if no fixtures are found.
+        for fixture_label in fixture_labels:
+            if self.find_fixtures(fixture_label):
+                break
+        else:
+            return
+
         with connection.constraint_checks_disabled():
             for fixture_label in fixture_labels:
                 self.load_label(fixture_label)
@@ -138,7 +150,7 @@ class Command(BaseCommand):
 
                 for obj in objects:
                     objects_in_fixture += 1
-                    if router.allow_migrate(self.using, obj.object.__class__):
+                    if router.allow_migrate_model(self.using, obj.object.__class__):
                         loaded_objects_in_fixture += 1
                         self.models.add(obj.object.__class__)
                         try:

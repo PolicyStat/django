@@ -3,13 +3,15 @@ from __future__ import unicode_literals
 import os
 
 from django.core.exceptions import ImproperlyConfigured
-from django.core.urlresolvers import reverse, clear_url_caches, set_script_prefix
+from django.core.urlresolvers import (
+    clear_url_caches, reverse, set_script_prefix,
+)
 from django.http import HttpResponsePermanentRedirect
 from django.middleware.locale import LocaleMiddleware
+from django.template import Context, Template
 from django.test import TestCase, override_settings
-from django.template import Template, Context
-from django.utils._os import upath
 from django.utils import translation
+from django.utils._os import upath
 
 
 class PermanentRedirectLocaleMiddleWare(LocaleMiddleware):
@@ -20,9 +22,6 @@ class PermanentRedirectLocaleMiddleWare(LocaleMiddleware):
     USE_I18N=True,
     LOCALE_PATHS=(
         os.path.join(os.path.dirname(upath(__file__)), 'locale'),
-    ),
-    TEMPLATE_DIRS=(
-        os.path.join(os.path.dirname(upath(__file__)), 'templates'),
     ),
     LANGUAGE_CODE='en-us',
     LANGUAGES=(
@@ -35,6 +34,15 @@ class PermanentRedirectLocaleMiddleWare(LocaleMiddleware):
         'django.middleware.common.CommonMiddleware',
     ),
     ROOT_URLCONF='i18n.patterns.urls.default',
+    TEMPLATES=[{
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [os.path.join(os.path.dirname(upath(__file__)), 'templates')],
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.i18n',
+            ],
+        },
+    }],
 )
 class URLTestCaseBase(TestCase):
     """

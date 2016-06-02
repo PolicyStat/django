@@ -1,12 +1,14 @@
+from __future__ import unicode_literals
+
 import os
 import stat
 import sys
 import tempfile
-from os.path import join, normcase, normpath, abspath, isabs, sep, dirname
+from os.path import abspath, dirname, isabs, join, normcase, normpath, sep
 
 from django.core.exceptions import SuspiciousFileOperation
-from django.utils.encoding import force_text
 from django.utils import six
+from django.utils.encoding import force_text
 
 try:
     WindowsError = WindowsError

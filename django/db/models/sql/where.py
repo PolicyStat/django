@@ -4,17 +4,16 @@ Code to manage the creation and SQL rendering of 'where' constraints.
 
 import collections
 import datetime
-from itertools import repeat
 import warnings
+from itertools import repeat
 
 from django.conf import settings
 from django.db.models.fields import DateTimeField, Field
-from django.db.models.sql.datastructures import EmptyResultSet, Empty
+from django.db.models.sql.datastructures import Empty, EmptyResultSet
+from django.utils import timezone, tree
 from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.six.moves import xrange
-from django.utils import timezone
-from django.utils import tree
-
+from django.utils.functional import cached_property
+from django.utils.six.moves import range
 
 # Connection types
 AND = 'AND'
@@ -228,7 +227,7 @@ class WhereNode(tree.Node):
             if max_in_list_size and len(params) > max_in_list_size:
                 # Break up the params list into an OR of manageable chunks.
                 in_clause_elements = ['(']
-                for offset in xrange(0, len(params), max_in_list_size):
+                for offset in range(0, len(params), max_in_list_size):
                     if offset > 0:
                         in_clause_elements.append(' OR ')
                     in_clause_elements.append('%s IN (' % field_sql)
@@ -309,6 +308,21 @@ class WhereNode(tree.Node):
                 clone.children.append(child)
         return clone
 
+    def relabeled_clone(self, change_map):
+        clone = self.clone()
+        clone.relabel_aliases(change_map)
+        return clone
+
+    @classmethod
+    def _contains_aggregate(cls, obj):
+        if isinstance(obj, tree.Node):
+            return any(cls._contains_aggregate(c) for c in obj.children)
+        return obj.contains_aggregate
+
+    @cached_property
+    def contains_aggregate(self):
+        return self._contains_aggregate(self)
+
 
 class EmptyWhere(WhereNode):
     def add(self, data, connector):
@@ -322,6 +336,7 @@ class EverythingNode(object):
     """
     A node that matches everything.
     """
+    contains_aggregate = False
 
     def as_sql(self, compiler=None, connection=None):
         return '', []
@@ -331,11 +346,16 @@ class NothingNode(object):
     """
     A node that matches nothing.
     """
+    contains_aggregate = False
+
     def as_sql(self, compiler=None, connection=None):
         raise EmptyResultSet
 
 
 class ExtraWhere(object):
+    # The contents are a black box - assume no aggregates are used.
+    contains_aggregate = False
+
     def __init__(self, sqls, params):
         self.sqls = sqls
         self.params = params
@@ -396,6 +416,10 @@ class Constraint(object):
 
 
 class SubqueryConstraint(object):
+    # Even if aggregates would be used in a subquery, the outer query isn't
+    # interested about those.
+    contains_aggregate = False
+
     def __init__(self, alias, columns, targets, query_object):
         self.alias = alias
         self.columns = columns

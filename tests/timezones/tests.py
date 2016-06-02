@@ -3,27 +3,35 @@ from __future__ import unicode_literals
 import datetime
 import re
 import sys
-from unittest import skipIf
 import warnings
+from unittest import skipIf
 from xml.dom.minidom import parseString
+
+from django.core import serializers
+from django.core.urlresolvers import reverse
+from django.db.models import Max, Min
+from django.http import HttpRequest
+from django.template import (
+    Context, RequestContext, Template, TemplateSyntaxError, context_processors,
+)
+from django.test import (
+    TestCase, override_settings, skipIfDBFeature, skipUnlessDBFeature,
+)
+from django.test.utils import requires_tz_support
+from django.utils import six, timezone
+
+from .forms import (
+    EventForm, EventLocalizedForm, EventLocalizedModelForm, EventModelForm,
+    EventSplitForm,
+)
+from .models import (
+    AllDayEvent, Event, MaybeEvent, Session, SessionEvent, Timestamp,
+)
 
 try:
     import pytz
 except ImportError:
     pytz = None
-
-from django.core import serializers
-from django.core.urlresolvers import reverse
-from django.db.models import Min, Max
-from django.http import HttpRequest
-from django.template import Context, RequestContext, Template, TemplateSyntaxError
-from django.test import TestCase, override_settings, skipIfDBFeature, skipUnlessDBFeature
-from django.test.utils import requires_tz_support
-from django.utils import six
-from django.utils import timezone
-
-from .forms import EventForm, EventSplitForm, EventLocalizedForm, EventModelForm, EventLocalizedModelForm
-from .models import Event, MaybeEvent, Session, SessionEvent, Timestamp, AllDayEvent
 
 
 # These tests use the EAT (Eastern Africa Time) and ICT (Indochina Time)
@@ -147,7 +155,7 @@ class LegacyDatabaseTests(TestCase):
         self.assertEqual(event.dt.replace(tzinfo=ICT), dt)
 
     @skipIfDBFeature('supports_timezones')
-    def test_aware_datetime_unspported(self):
+    def test_aware_datetime_unsupported(self):
         dt = datetime.datetime(2011, 9, 1, 13, 20, 30, tzinfo=EAT)
         with self.assertRaises(ValueError):
             Event.objects.create(dt=dt)
@@ -932,11 +940,13 @@ class TemplateTests(TestCase):
     @skipIf(sys.platform.startswith('win'), "Windows uses non-standard time zone names")
     def test_tz_template_context_processor(self):
         """
-        Test the django.core.context_processors.tz template context processor.
+        Test the django.template.context_processors.tz template context processor.
         """
         tpl = Template("{{ TIME_ZONE }}")
-        self.assertEqual(tpl.render(Context()), "")
-        self.assertEqual(tpl.render(RequestContext(HttpRequest())), "Africa/Nairobi" if pytz else "EAT")
+        context = Context()
+        self.assertEqual(tpl.render(context), "")
+        request_context = RequestContext(HttpRequest(), processors=[context_processors.tz])
+        self.assertEqual(tpl.render(request_context), "Africa/Nairobi" if pytz else "EAT")
 
     @requires_tz_support
     def test_date_and_time_template_filters(self):

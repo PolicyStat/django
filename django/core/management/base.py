@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
-
-from __future__ import unicode_literals
-
 """
 Base classes for writing management commands (named commands which can
 be executed through ``django-admin`` or ``manage.py``).
 """
 
+from __future__ import unicode_literals
+
 import os
 import sys
 import warnings
-
 from argparse import ArgumentParser
 from optparse import OptionParser
 
@@ -18,7 +16,10 @@ import django
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.color import color_style, no_style
-from django.utils.deprecation import RemovedInDjango19Warning, RemovedInDjango20Warning
+from django.db import connections
+from django.utils.deprecation import (
+    RemovedInDjango19Warning, RemovedInDjango110Warning,
+)
 from django.utils.encoding import force_str
 
 
@@ -58,7 +59,7 @@ class CommandParser(ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         # Catch missing argument for a better error message
         if (hasattr(self.cmd, 'missing_args_message') and
-                not (args or any([not arg.startswith('-') for arg in args]))):
+                not (args or any(not arg.startswith('-') for arg in args))):
             self.error(self.cmd.missing_args_message)
         return super(CommandParser, self).parse_args(args, namespace)
 
@@ -173,7 +174,8 @@ class BaseCommand(object):
     ``option_list``
         This is the list of ``optparse`` options which will be fed
         into the command's ``OptionParser`` for parsing arguments.
-        Deprecated and will be removed in Django 2.0.
+        Deprecated and will be removed in Django 1.10.
+        Use ``add_arguments`` instead.
 
     ``output_transaction``
         A boolean indicating whether the command outputs SQL
@@ -204,21 +206,20 @@ class BaseCommand(object):
 
     ``leave_locale_alone``
         A boolean indicating whether the locale set in settings should be
-        preserved during the execution of the command instead of being
-        forcibly set to 'en-us'.
+        preserved during the execution of the command instead of translations
+        being deactivated.
 
         Default value is ``False``.
 
         Make sure you know what you are doing if you decide to change the value
         of this option in your custom command if it creates database content
         that is locale-sensitive and such content shouldn't contain any
-        translations (like it happens e.g. with django.contrim.auth
-        permissions) as making the locale differ from the de facto default
-        'en-us' might cause unintended effects.
+        translations (like it happens e.g. with django.contrib.auth
+        permissions) as activating any locale might cause unintended effects.
 
         This option can't be False when the can_import_settings option is set
-        to False too because attempting to set the locale needs access to
-        settings. This condition will generate a CommandError.
+        to False too because attempting to deactivate translations needs access
+        to settings. This condition will generate a CommandError.
     """
     # Metadata about this command.
     option_list = ()
@@ -300,15 +301,18 @@ class BaseCommand(object):
 
         """
         if not self.use_argparse:
+            def store_as_int(option, opt_str, value, parser):
+                setattr(parser.values, option.dest, int(value))
+
             # Backwards compatibility: use deprecated optparse module
             warnings.warn("OptionParser usage for Django management commands "
                           "is deprecated, use ArgumentParser instead",
-                          RemovedInDjango20Warning)
+                          RemovedInDjango110Warning)
             parser = OptionParser(prog=prog_name,
                                 usage=self.usage(subcommand),
                                 version=self.get_version())
-            parser.add_option('-v', '--verbosity', action='store', dest='verbosity', default='1',
-                type='choice', choices=['0', '1', '2', '3'],
+            parser.add_option('-v', '--verbosity', action='callback', dest='verbosity', default=1,
+                type='choice', choices=['0', '1', '2', '3'], callback=store_as_int,
                 help='Verbosity level; 0=minimal output, 1=normal output, 2=verbose output, 3=very verbose output')
             parser.add_option('--settings',
                 help=(
@@ -398,6 +402,8 @@ class BaseCommand(object):
             else:
                 self.stderr.write('%s: %s' % (e.__class__.__name__, e))
             sys.exit(1)
+        finally:
+            connections.close_all()
 
     def execute(self, *args, **options):
         """
@@ -413,9 +419,6 @@ class BaseCommand(object):
         if options.get('stderr'):
             self.stderr = OutputWrapper(options.get('stderr'), self.stderr.style_func)
 
-        if self.can_import_settings:
-            from django.conf import settings  # NOQA
-
         saved_locale = None
         if not self.leave_locale_alone:
             # Only mess with locales if we can assume we have a working
@@ -427,12 +430,12 @@ class BaseCommand(object):
                                    "(%s) and 'can_import_settings' (%s) command "
                                    "options." % (self.leave_locale_alone,
                                                  self.can_import_settings))
-            # Switch to US English, because django-admin creates database
+            # Deactivate translations, because django-admin creates database
             # content like permissions, and those shouldn't contain any
             # translations.
             from django.utils import translation
             saved_locale = translation.get_language()
-            translation.activate('en-us')
+            translation.deactivate_all()
 
         try:
             if (self.requires_system_checks and
@@ -646,9 +649,9 @@ class NoArgsCommand(BaseCommand):
 
     def __init__(self):
         warnings.warn(
-            "NoArgsCommand class is deprecated and will be removed in Django 2.0. "
+            "NoArgsCommand class is deprecated and will be removed in Django 1.10. "
             "Use BaseCommand instead, which takes no arguments by default.",
-            RemovedInDjango20Warning
+            RemovedInDjango110Warning
         )
         super(NoArgsCommand, self).__init__()
 

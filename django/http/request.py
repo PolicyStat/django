@@ -14,15 +14,15 @@ from django.core.exceptions import DisallowedHost, ImproperlyConfigured
 from django.core.files import uploadhandler
 from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.utils import six
-from django.utils.datastructures import MultiValueDict, ImmutableList
+from django.utils.datastructures import ImmutableList, MultiValueDict
 from django.utils.encoding import (
-    force_bytes, force_text, force_str, escape_uri_path, iri_to_uri,
+    escape_uri_path, force_bytes, force_str, force_text, iri_to_uri,
 )
-from django.utils.six.moves.urllib.parse import parse_qsl, urlencode, quote, urljoin, urlsplit
-
+from django.utils.six.moves.urllib.parse import (
+    parse_qsl, quote, urlencode, urljoin, urlsplit,
+)
 
 RAISE_ERROR = object()
-absolute_http_url_re = re.compile(r"^https?://", re.I)
 host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9:]+\])(:\d+)?$")
 
 
@@ -64,7 +64,11 @@ class HttpRequest(object):
         self._post_parse_error = False
 
     def __repr__(self):
-        return build_request_repr(self)
+        if self.method is None or not self.get_full_path():
+            return force_str('<%s>' % self.__class__.__name__)
+        return force_str(
+            '<%s: %s %r>' % (self.__class__.__name__, self.method, force_str(self.get_full_path()))
+        )
 
     def get_host(self):
         """Returns the HTTP host using the environment or request headers."""
@@ -455,8 +459,8 @@ class QueryDict(MultiValueDict):
             encode = lambda k, v: urlencode({k: v})
         for k, list_ in self.lists():
             k = force_bytes(k, self.encoding)
-            output.extend([encode(k, force_bytes(v, self.encoding))
-                           for v in list_])
+            output.extend(encode(k, force_bytes(v, self.encoding))
+                          for v in list_)
         return '&'.join(output)
 
 

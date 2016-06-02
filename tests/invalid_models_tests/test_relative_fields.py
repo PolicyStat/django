@@ -3,8 +3,9 @@ from __future__ import unicode_literals
 
 from django.core.checks import Error, Warning as DjangoWarning
 from django.db import models
-from django.test.utils import override_settings
 from django.test.testcases import skipIfDBFeature
+from django.test.utils import override_settings
+from django.utils import six
 
 from .base import IsolatedModelsTestCase
 
@@ -295,25 +296,27 @@ class RelativeFieldTests(IsolatedModelsTestCase):
         self.assertEqual(errors, expected)
 
     def test_foreign_key_to_abstract_model(self):
-        class Model(models.Model):
-            foreign_key = models.ForeignKey('AbstractModel')
-
         class AbstractModel(models.Model):
             class Meta:
                 abstract = True
 
-        field = Model._meta.get_field('foreign_key')
-        errors = field.check()
-        expected = [
-            Error(
-                ("Field defines a relation with model 'AbstractModel', "
-                 "which is either not installed, or is abstract."),
-                hint=None,
-                obj=field,
-                id='fields.E300',
-            ),
+        class Model(models.Model):
+            rel_string_foreign_key = models.ForeignKey('AbstractModel')
+            rel_class_foreign_key = models.ForeignKey(AbstractModel)
+
+        fields = [
+            Model._meta.get_field('rel_string_foreign_key'),
+            Model._meta.get_field('rel_class_foreign_key'),
         ]
-        self.assertEqual(errors, expected)
+        expected_error = Error(
+            "Field defines a relation with model 'AbstractModel', "
+            "which is either not installed, or is abstract.",
+            id='fields.E300',
+        )
+        for field in fields:
+            expected_error.obj = field
+            errors = field.check()
+            self.assertEqual(errors, [expected_error])
 
     def test_m2m_to_abstract_model(self):
         class AbstractModel(models.Model):
@@ -321,20 +324,22 @@ class RelativeFieldTests(IsolatedModelsTestCase):
                 abstract = True
 
         class Model(models.Model):
-            m2m = models.ManyToManyField('AbstractModel')
+            rel_string_m2m = models.ManyToManyField('AbstractModel')
+            rel_class_m2m = models.ManyToManyField(AbstractModel)
 
-        field = Model._meta.get_field('m2m')
-        errors = field.check(from_model=Model)
-        expected = [
-            Error(
-                ("Field defines a relation with model 'AbstractModel', "
-                 "which is either not installed, or is abstract."),
-                hint=None,
-                obj=field,
-                id='fields.E300',
-            ),
+        fields = [
+            Model._meta.get_field('rel_string_m2m'),
+            Model._meta.get_field('rel_class_m2m'),
         ]
-        self.assertEqual(errors, expected)
+        expected_error = Error(
+            "Field defines a relation with model 'AbstractModel', "
+            "which is either not installed, or is abstract.",
+            id='fields.E300',
+        )
+        for field in fields:
+            expected_error.obj = field
+            errors = field.check(from_model=Model)
+            self.assertEqual(errors, [expected_error])
 
     def test_unique_m2m(self):
         class Person(models.Model):
@@ -559,9 +564,12 @@ class RelativeFieldTests(IsolatedModelsTestCase):
             'contains_%s_whitespace' % whitespace,
             'ends_with_with_illegal_non_alphanumeric_%s' % illegal_non_alphanumeric,
             'ends_with_whitespace_%s' % whitespace,
-            # Python's keyword
-            'with',
+            'with',  # a Python keyword
+            'related_name\n',
         ]
+        # Python 2 crashes on non-ASCII strings.
+        if six.PY3:
+            invalid_related_names.append('，')
 
         class Parent(models.Model):
             pass
@@ -600,6 +608,9 @@ class RelativeFieldTests(IsolatedModelsTestCase):
             '_+',
             '+',
         ]
+        # Python 2 crashes on non-ASCII strings.
+        if six.PY3:
+            related_names.extend(['試', '試驗+'])
 
         class Parent(models.Model):
             pass
@@ -848,41 +859,65 @@ class ExplicitRelatedNameClashTests(IsolatedModelsTestCase):
 
 class ExplicitRelatedQueryNameClashTests(IsolatedModelsTestCase):
 
-    def test_fk_to_integer(self):
+    def test_fk_to_integer(self, related_name=None):
         self._test_explicit_related_query_name_clash(
             target=models.IntegerField(),
             relative=models.ForeignKey('Target',
+                related_name=related_name,
                 related_query_name='clash'))
 
-    def test_fk_to_fk(self):
+    def test_hidden_fk_to_integer(self, related_name=None):
+        self.test_fk_to_integer(related_name='+')
+
+    def test_fk_to_fk(self, related_name=None):
         self._test_explicit_related_query_name_clash(
             target=models.ForeignKey('Another'),
             relative=models.ForeignKey('Target',
+                related_name=related_name,
                 related_query_name='clash'))
 
-    def test_fk_to_m2m(self):
+    def test_hidden_fk_to_fk(self):
+        self.test_fk_to_fk(related_name='+')
+
+    def test_fk_to_m2m(self, related_name=None):
         self._test_explicit_related_query_name_clash(
             target=models.ManyToManyField('Another'),
             relative=models.ForeignKey('Target',
+                related_name=related_name,
                 related_query_name='clash'))
 
-    def test_m2m_to_integer(self):
+    def test_hidden_fk_to_m2m(self):
+        self.test_fk_to_m2m(related_name='+')
+
+    def test_m2m_to_integer(self, related_name=None):
         self._test_explicit_related_query_name_clash(
             target=models.IntegerField(),
             relative=models.ManyToManyField('Target',
+                related_name=related_name,
                 related_query_name='clash'))
 
-    def test_m2m_to_fk(self):
+    def test_hidden_m2m_to_integer(self):
+        self.test_m2m_to_integer(related_name='+')
+
+    def test_m2m_to_fk(self, related_name=None):
         self._test_explicit_related_query_name_clash(
             target=models.ForeignKey('Another'),
             relative=models.ManyToManyField('Target',
+                related_name=related_name,
                 related_query_name='clash'))
 
-    def test_m2m_to_m2m(self):
+    def test_hidden_m2m_to_fk(self):
+        self.test_m2m_to_fk(related_name='+')
+
+    def test_m2m_to_m2m(self, related_name=None):
         self._test_explicit_related_query_name_clash(
             target=models.ManyToManyField('Another'),
             relative=models.ManyToManyField('Target',
+                related_name=related_name,
                 related_query_name='clash'))
+
+    def test_hidden_m2m_to_m2m(self):
+        self.test_m2m_to_m2m(related_name='+')
 
     def _test_explicit_related_query_name_clash(self, target, relative):
         class Another(models.Model):

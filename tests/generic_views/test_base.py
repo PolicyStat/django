@@ -2,11 +2,17 @@ from __future__ import unicode_literals
 
 import time
 import unittest
+import warnings
 
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpResponse
-from django.test import TestCase, RequestFactory, override_settings
-from django.views.generic import View, TemplateView, RedirectView
+from django.test import (
+    RequestFactory, TestCase, ignore_warnings, override_settings,
+)
+from django.test.utils import require_jinja2
+from django.utils import six
+from django.utils.deprecation import RemovedInDjango19Warning
+from django.views.generic import RedirectView, TemplateView, View
 
 from . import views
 
@@ -277,9 +283,22 @@ class TemplateViewTest(TestCase):
 
     def test_template_name_required(self):
         """
-        A template view must provide a template name
+        A template view must provide a template name.
         """
         self.assertRaises(ImproperlyConfigured, self.client.get, '/template/no_template/')
+
+    @require_jinja2
+    def test_template_engine(self):
+        """
+        A template view may provide a template engine.
+        """
+        request = self.rf.get('/using/')
+        view = TemplateView.as_view(template_name='generic_views/using.html')
+        self.assertEqual(view(request).render().content, b'DTL\n')
+        view = TemplateView.as_view(template_name='generic_views/using.html', template_engine='django')
+        self.assertEqual(view(request).render().content, b'DTL\n')
+        view = TemplateView.as_view(template_name='generic_views/using.html', template_engine='jinja2')
+        self.assertEqual(view(request).render().content, b'Jinja2\n')
 
     def test_template_params(self):
         """
@@ -327,6 +346,7 @@ class TemplateViewTest(TestCase):
         self.assertEqual(response['Content-Type'], 'text/plain')
 
 
+@ignore_warnings(category=RemovedInDjango19Warning)
 @override_settings(ROOT_URLCONF='generic_views.urls')
 class RedirectViewTest(TestCase):
 
@@ -438,6 +458,69 @@ class RedirectViewTest(TestCase):
         view = RedirectView()
         response = view.dispatch(self.rf.head('/foo/'))
         self.assertEqual(response.status_code, 410)
+
+
+@override_settings(ROOT_URLCONF='generic_views.urls')
+class RedirectViewDeprecationTest(TestCase):
+
+    rf = RequestFactory()
+
+    def test_deprecation_warning_init(self):
+        with warnings.catch_warnings(record=True) as warns:
+            warnings.simplefilter('always')
+
+            view = RedirectView()
+            response = view.dispatch(self.rf.head('/python/'))
+
+        self.assertEqual(response.status_code, 410)
+        self.assertEqual(len(warns), 1)
+        self.assertIs(warns[0].category, RemovedInDjango19Warning)
+        self.assertEqual(
+            six.text_type(warns[0].message),
+            "Default value of 'RedirectView.permanent' will change "
+            "from True to False in Django 1.9. Set an explicit value "
+            "to silence this warning.",
+        )
+
+    def test_deprecation_warning_raised_when_permanent_not_passed(self):
+        with warnings.catch_warnings(record=True) as warns:
+            warnings.simplefilter('always')
+
+            view_function = RedirectView.as_view(url='/bbb/')
+            request = self.rf.request(PATH_INFO='/aaa/')
+            view_function(request)
+
+        self.assertEqual(len(warns), 1)
+        self.assertIs(warns[0].category, RemovedInDjango19Warning)
+        self.assertEqual(
+            six.text_type(warns[0].message),
+            "Default value of 'RedirectView.permanent' will change "
+            "from True to False in Django 1.9. Set an explicit value "
+            "to silence this warning.",
+        )
+
+    def test_no_deprecation_warning_when_permanent_passed(self):
+        with warnings.catch_warnings(record=True) as warns:
+            warnings.simplefilter('always')
+
+            view_function = RedirectView.as_view(url='/bar/', permanent=False)
+            request = self.rf.request(PATH_INFO='/foo/')
+            view_function(request)
+
+        self.assertEqual(len(warns), 0)
+
+    def test_no_deprecation_warning_with_custom_redirectview(self):
+        class CustomRedirectView(RedirectView):
+            permanent = False
+
+        with warnings.catch_warnings(record=True) as warns:
+            warnings.simplefilter('always')
+
+            view_function = CustomRedirectView.as_view(url='/eggs/')
+            request = self.rf.request(PATH_INFO='/spam/')
+            view_function(request)
+
+        self.assertEqual(len(warns), 0)
 
 
 class GetContextDataTest(unittest.TestCase):

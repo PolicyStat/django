@@ -1,14 +1,27 @@
 from __future__ import unicode_literals
 
-from datetime import date, datetime
+import contextlib
 import time
 import unittest
+from datetime import date, datetime
 
 from django.core.exceptions import FieldError
-from django.db import models
-from django.db import connection
+from django.db import connection, models
 from django.test import TestCase, override_settings
+from django.utils import timezone
+
 from .models import Author, MySQLUnixTimestamp
+
+
+@contextlib.contextmanager
+def register_lookup(field, *lookups):
+    try:
+        for lookup in lookups:
+            field.register_lookup(lookup)
+        yield
+    finally:
+        for lookup in lookups:
+            field._unregister_lookup(lookup)
 
 
 class Div3Lookup(models.Lookup):
@@ -191,8 +204,7 @@ class LookupTests(TestCase):
         a2 = Author.objects.create(name='a2', age=2)
         a3 = Author.objects.create(name='a3', age=3)
         a4 = Author.objects.create(name='a4', age=4)
-        models.IntegerField.register_lookup(Div3Lookup)
-        try:
+        with register_lookup(models.IntegerField, Div3Lookup):
             self.assertQuerysetEqual(
                 Author.objects.filter(age__div3=0),
                 [a3], lambda x: x
@@ -209,8 +221,6 @@ class LookupTests(TestCase):
                 Author.objects.filter(age__div3=3),
                 [], lambda x: x
             )
-        finally:
-            models.IntegerField._unregister_lookup(Div3Lookup)
 
     @unittest.skipUnless(connection.vendor == 'postgresql', "PostgreSQL specific SQL used")
     def test_birthdate_month(self):
@@ -218,8 +228,7 @@ class LookupTests(TestCase):
         a2 = Author.objects.create(name='a2', birthdate=date(2012, 2, 29))
         a3 = Author.objects.create(name='a3', birthdate=date(2012, 1, 31))
         a4 = Author.objects.create(name='a4', birthdate=date(2012, 3, 1))
-        models.DateField.register_lookup(InMonth)
-        try:
+        with register_lookup(models.DateField, InMonth):
             self.assertQuerysetEqual(
                 Author.objects.filter(birthdate__inmonth=date(2012, 1, 15)),
                 [a3], lambda x: x
@@ -240,12 +249,9 @@ class LookupTests(TestCase):
                 Author.objects.filter(birthdate__inmonth=date(2012, 4, 1)),
                 [], lambda x: x
             )
-        finally:
-            models.DateField._unregister_lookup(InMonth)
 
     def test_div3_extract(self):
-        models.IntegerField.register_lookup(Div3Transform)
-        try:
+        with register_lookup(models.IntegerField, Div3Transform):
             a1 = Author.objects.create(name='a1', age=1)
             a2 = Author.objects.create(name='a2', age=2)
             a3 = Author.objects.create(name='a3', age=3)
@@ -269,15 +275,12 @@ class LookupTests(TestCase):
             self.assertQuerysetEqual(
                 baseqs.filter(age__div3__range=(1, 2)),
                 [a1, a2, a4], lambda x: x)
-        finally:
-            models.IntegerField._unregister_lookup(Div3Transform)
 
 
 class BilateralTransformTests(TestCase):
 
     def test_bilateral_upper(self):
-        models.CharField.register_lookup(UpperBilateralTransform)
-        try:
+        with register_lookup(models.CharField, UpperBilateralTransform):
             Author.objects.bulk_create([
                 Author(name='Doe'),
                 Author(name='doe'),
@@ -286,20 +289,17 @@ class BilateralTransformTests(TestCase):
             self.assertQuerysetEqual(
                 Author.objects.filter(name__upper='doe'),
                 ["<Author: Doe>", "<Author: doe>"], ordered=False)
-        finally:
-            models.CharField._unregister_lookup(UpperBilateralTransform)
+            self.assertQuerysetEqual(
+                Author.objects.filter(name__upper__contains='f'),
+                ["<Author: Foo>"], ordered=False)
 
     def test_bilateral_inner_qs(self):
-        models.CharField.register_lookup(UpperBilateralTransform)
-        try:
+        with register_lookup(models.CharField, UpperBilateralTransform):
             with self.assertRaises(NotImplementedError):
                 Author.objects.filter(name__upper__in=Author.objects.values_list('name'))
-        finally:
-            models.CharField._unregister_lookup(UpperBilateralTransform)
 
     def test_div3_bilateral_extract(self):
-        models.IntegerField.register_lookup(Div3BilateralTransform)
-        try:
+        with register_lookup(models.IntegerField, Div3BilateralTransform):
             a1 = Author.objects.create(name='a1', age=1)
             a2 = Author.objects.create(name='a2', age=2)
             a3 = Author.objects.create(name='a3', age=3)
@@ -323,13 +323,9 @@ class BilateralTransformTests(TestCase):
             self.assertQuerysetEqual(
                 baseqs.filter(age__div3__range=(1, 2)),
                 [a1, a2, a4], lambda x: x)
-        finally:
-            models.IntegerField._unregister_lookup(Div3BilateralTransform)
 
     def test_bilateral_order(self):
-        models.IntegerField.register_lookup(Mult3BilateralTransform)
-        models.IntegerField.register_lookup(Div3BilateralTransform)
-        try:
+        with register_lookup(models.IntegerField, Mult3BilateralTransform, Div3BilateralTransform):
             a1 = Author.objects.create(name='a1', age=1)
             a2 = Author.objects.create(name='a2', age=2)
             a3 = Author.objects.create(name='a3', age=3)
@@ -343,13 +339,9 @@ class BilateralTransformTests(TestCase):
             self.assertQuerysetEqual(
                 baseqs.filter(age__div3__mult3=42),
                 [a3], lambda x: x)
-        finally:
-            models.IntegerField._unregister_lookup(Mult3BilateralTransform)
-            models.IntegerField._unregister_lookup(Div3BilateralTransform)
 
     def test_bilateral_fexpr(self):
-        models.IntegerField.register_lookup(Mult3BilateralTransform)
-        try:
+        with register_lookup(models.IntegerField, Mult3BilateralTransform):
             a1 = Author.objects.create(name='a1', age=1, average_rating=3.2)
             a2 = Author.objects.create(name='a2', age=2, average_rating=0.5)
             a3 = Author.objects.create(name='a3', age=3, average_rating=1.5)
@@ -362,23 +354,18 @@ class BilateralTransformTests(TestCase):
                 # Same as age >= average_rating
                 baseqs.filter(age__mult3__gte=models.F('average_rating')),
                 [a2, a3], lambda x: x)
-        finally:
-            models.IntegerField._unregister_lookup(Mult3BilateralTransform)
 
 
 @override_settings(USE_TZ=True)
 class DateTimeLookupTests(TestCase):
     @unittest.skipUnless(connection.vendor == 'mysql', "MySQL specific SQL used")
     def test_datetime_output_field(self):
-        models.PositiveIntegerField.register_lookup(DateTimeTransform)
-        try:
+        with register_lookup(models.PositiveIntegerField, DateTimeTransform):
             ut = MySQLUnixTimestamp.objects.create(timestamp=time.time())
-            y2k = datetime(2000, 1, 1)
+            y2k = timezone.make_aware(datetime(2000, 1, 1))
             self.assertQuerysetEqual(
                 MySQLUnixTimestamp.objects.filter(timestamp__as_datetime__gt=y2k),
                 [ut], lambda x: x)
-        finally:
-            models.PositiveIntegerField._unregister_lookup(DateTimeTransform)
 
 
 class YearLteTests(TestCase):
@@ -508,8 +495,7 @@ class TrackCallsYearTransform(YearTransform):
 
 class LookupTransformCallOrderTests(TestCase):
     def test_call_order(self):
-        models.DateField.register_lookup(TrackCallsYearTransform)
-        try:
+        with register_lookup(models.DateField, TrackCallsYearTransform):
             # junk lookup - tries lookup, then transform, then fails
             with self.assertRaises(FieldError):
                 Author.objects.filter(birthdate__year__junk=2012)
@@ -532,9 +518,6 @@ class LookupTransformCallOrderTests(TestCase):
             self.assertEqual(TrackCallsYearTransform.call_order,
                              ['lookup'])
 
-        finally:
-            models.DateField._unregister_lookup(TrackCallsYearTransform)
-
 
 class CustomisedMethodsTests(TestCase):
 
@@ -553,3 +536,15 @@ class CustomisedMethodsTests(TestCase):
     def test_overridden_get_transform_chain(self):
         q = CustomModel.objects.filter(field__transformfunc_banana__transformfunc_pear=3)
         self.assertIn('pear()', str(q.query))
+
+
+class SubqueryTransformTests(TestCase):
+    def test_subquery_usage(self):
+        with register_lookup(models.IntegerField, Div3Transform):
+            Author.objects.create(name='a1', age=1)
+            a2 = Author.objects.create(name='a2', age=2)
+            Author.objects.create(name='a3', age=3)
+            Author.objects.create(name='a4', age=4)
+            self.assertQuerysetEqual(
+                Author.objects.order_by('name').filter(id__in=Author.objects.filter(age__div3=2)),
+                [a2], lambda x: x)

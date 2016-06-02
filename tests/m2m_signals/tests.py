@@ -5,7 +5,7 @@ Testing signals emitted on changing m2m relations.
 from django.db import models
 from django.test import TestCase
 
-from .models import Part, Car, SportsCar, Person
+from .models import Car, Part, Person, SportsCar
 
 
 class ManyToManySignalsTest(TestCase):
@@ -90,7 +90,7 @@ class ManyToManySignalsTest(TestCase):
         })
         self.assertEqual(self.m2m_changed_messages, expected_messages)
 
-        # give the BMW and Toyata some doors as well
+        # give the BMW and Toyota some doors as well
         self.doors.car_set.add(self.bmw, self.toyota)
         expected_messages.append({
             'instance': self.doors,

@@ -79,8 +79,8 @@ After installing Memcached itself, you'll need to install a Memcached
 binding. There are several Python Memcached bindings available; the
 two most common are `python-memcached`_ and `pylibmc`_.
 
-.. _`python-memcached`: ftp://ftp.tummy.com/pub/python-memcached/
-.. _`pylibmc`: http://sendapatch.se/projects/pylibmc/
+.. _`python-memcached`: https://pypi.python.org/pypi/python-memcached
+.. _`pylibmc`: https://pypi.python.org/pypi/pylibmc
 
 To use Memcached with Django:
 
@@ -111,6 +111,15 @@ In this example, Memcached is available through a local Unix socket file
         'default': {
             'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
             'LOCATION': 'unix:/tmp/memcached.sock',
+        }
+    }
+
+When using the ``pylibmc`` binding, do not include the ``unix:/`` prefix::
+
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.memcached.PyLibMCCache',
+            'LOCATION': '/tmp/memcached.sock',
         }
     }
 
@@ -169,11 +178,12 @@ got a fast, well-indexed database server.
 
 To use a database table as your cache backend:
 
-    * Set :setting:`BACKEND <CACHES-BACKEND>` to
-      ``django.core.cache.backends.db.DatabaseCache``
-    * Set :setting:`LOCATION <CACHES-LOCATION>` to ``tablename``, the name of
-      the database table. This name can be whatever you want, as long as it's
-      a valid table name that's not already being used in your database.
+* Set :setting:`BACKEND <CACHES-BACKEND>` to
+  ``django.core.cache.backends.db.DatabaseCache``
+
+* Set :setting:`LOCATION <CACHES-LOCATION>` to ``tablename``, the name of the
+  database table. This name can be whatever you want, as long as it's a valid
+  table name that's not already being used in your database.
 
 In this example, the cache table's name is ``my_cache_table``::
 
@@ -232,19 +242,19 @@ operations to ``cache_replica``, and all write operations to
 
         def db_for_read(self, model, **hints):
             "All cache read operations go to the replica"
-            if model._meta.app_label in ('django_cache',):
+            if model._meta.app_label == 'django_cache':
                 return 'cache_replica'
             return None
 
         def db_for_write(self, model, **hints):
             "All cache write operations go to primary"
-            if model._meta.app_label in ('django_cache',):
+            if model._meta.app_label == 'django_cache':
                 return 'cache_primary'
             return None
 
-        def allow_migrate(self, db, model):
+        def allow_migrate(self, db, app_label, model_name=None, **hints):
             "Only install the cache model on primary"
-            if model._meta.app_label in ('django_cache',):
+            if app_label == 'django_cache':
                 return db == 'cache_primary'
             return None
 
@@ -304,7 +314,7 @@ example::
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'unique-snowflake'
+            'LOCATION': 'unique-snowflake',
         }
     }
 
@@ -365,14 +375,14 @@ Each cache backend can be given additional arguments to control caching
 behavior. These arguments are provided as additional keys in the
 :setting:`CACHES` setting. Valid arguments are as follows:
 
-
 * :setting:`TIMEOUT <CACHES-TIMEOUT>`: The default timeout, in
   seconds, to use for the cache. This argument defaults to ``300`` seconds (5 minutes).
 
   .. versionadded:: 1.7
 
   You can set ``TIMEOUT`` to ``None`` so that, by default, cache keys never
-  expire.
+  expire. A value of ``0`` causes keys to immediately expire (effectively
+  "don't cache").
 
 * :setting:`OPTIONS <CACHES-OPTIONS>`: Any options that should be
   passed to the cache backend. The list of valid options will vary
@@ -434,6 +444,8 @@ of 60 seconds, and a maximum capacity of 1000 items::
 
 Invalid arguments are silently ignored, as are invalid values of known
 arguments.
+
+.. _the-per-site-cache:
 
 The per-site cache
 ==================
@@ -561,9 +573,9 @@ setting for the middleware.  It can be used like this::
     def my_view(request):
         ...
 
-The two settings can also be combined. If you specify a ``cache`` *and*
-a ``key_prefix``, you will get all the settings of the requested cache
-alias, but with the key_prefix overridden.
+The ``key_prefix`` and ``cache`` arguments may be specified together. The
+``key_prefix`` argument and the :setting:`KEY_PREFIX <CACHES-KEY_PREFIX>`
+specified under :setting:`CACHES` will be concatenated.
 
 Specifying per-view cache in the URLconf
 ----------------------------------------
@@ -771,7 +783,8 @@ The basic interface is ``set(key, value, timeout)`` and ``get(key)``::
 The ``timeout`` argument is optional and defaults to the ``timeout`` argument
 of the appropriate backend in the :setting:`CACHES` setting (explained above).
 It's the number of seconds the value should be stored in the cache. Passing in
-``None`` for ``timeout`` will cache the value forever.
+``None`` for ``timeout`` will cache the value forever. A ``timeout`` of ``0``
+won't cache the value.
 
 If the object doesn't exist in the cache, ``cache.get()`` returns ``None``::
 

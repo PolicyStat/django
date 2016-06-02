@@ -2,7 +2,9 @@ from django.conf import settings
 from django.core.cache import caches
 from django.core.cache.backends.db import BaseDatabaseCache
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connections, router, transaction, models, DEFAULT_DB_ALIAS
+from django.db import (
+    DEFAULT_DB_ALIAS, connections, models, router, transaction,
+)
 from django.db.utils import DatabaseError
 from django.utils.encoding import force_text
 
@@ -36,7 +38,7 @@ class Command(BaseCommand):
 
     def create_table(self, database, tablename):
         cache = BaseDatabaseCache(tablename, {})
-        if not router.allow_migrate(database, cache.cache_model_class):
+        if not router.allow_migrate_model(database, cache.cache_model_class):
             return
         connection = connections[database]
 

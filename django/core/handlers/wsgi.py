@@ -4,23 +4,21 @@ import cgi
 import codecs
 import logging
 import sys
+import warnings
 from io import BytesIO
 from threading import Lock
-import warnings
 
 from django import http
 from django.conf import settings
 from django.core import signals
 from django.core.handlers import base
 from django.core.urlresolvers import set_script_prefix
-from django.utils import datastructures
+# For backwards compatibility -- lots of code uses this in the wild!
+from django.http.response import REASON_PHRASES as STATUS_CODE_TEXT  # NOQA
+from django.utils import datastructures, six
 from django.utils.deprecation import RemovedInDjango19Warning
 from django.utils.encoding import force_str, force_text
 from django.utils.functional import cached_property
-from django.utils import six
-
-# For backwards compatibility -- lots of code uses this in the wild!
-from django.http.response import REASON_PHRASES as STATUS_CODE_TEXT  # NOQA
 
 logger = logging.getLogger('django.request')
 
@@ -197,6 +195,8 @@ class WSGIHandler(base.BaseHandler):
         for c in response.cookies.values():
             response_headers.append((str('Set-Cookie'), str(c.output(header=''))))
         start_response(force_str(status), response_headers)
+        if getattr(response, 'file_to_stream', None) is not None and environ.get('wsgi.file_wrapper'):
+            response = environ['wsgi.file_wrapper'](response.file_to_stream)
         return response
 
 

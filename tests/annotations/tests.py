@@ -1,17 +1,31 @@
 from __future__ import unicode_literals
+
 import datetime
 from decimal import Decimal
 
-from django.core.exceptions import FieldError
+from django.core.exceptions import FieldDoesNotExist, FieldError
 from django.db.models import (
-    Sum, Count,
-    F, Value, Func,
-    IntegerField, BooleanField, CharField)
-from django.db.models.fields import FieldDoesNotExist
+    BooleanField, CharField, Count, DateTimeField, ExpressionWrapper, F, Func,
+    IntegerField, Sum, Value,
+)
 from django.test import TestCase
 from django.utils import six
 
-from .models import Author, Book, Store, DepartmentStore, Company, Employee
+from .models import (
+    Author, Book, Company, DepartmentStore, Employee, Store, Ticket,
+)
+
+
+def cxOracle_py3_bug(func):
+    """
+    There's a bug in Django/cx_Oracle with respect to string handling under
+    Python 3 (essentially, they treat Python 3 strings as Python 2 strings
+    rather than unicode). This makes some tests here fail under Python 3, so
+    we mark them as expected failures until someone fixes them in #23843.
+    """
+    from unittest import expectedFailure
+    from django.db import connection
+    return expectedFailure(func) if connection.vendor == 'oracle' and six.PY3 else func
 
 
 class NonAggregateAnnotationTestCase(TestCase):
@@ -33,6 +47,24 @@ class NonAggregateAnnotationTestCase(TestCase):
             num_awards=F('publisher__num_awards'))
         for book in books:
             self.assertEqual(book.num_awards, book.publisher.num_awards)
+
+    def test_mixed_type_annotation_date_interval(self):
+        active = datetime.datetime(2015, 3, 20, 14, 0, 0)
+        duration = datetime.timedelta(hours=1)
+        expires = datetime.datetime(2015, 3, 20, 14, 0, 0) + duration
+        Ticket.objects.create(active_at=active, duration=duration)
+        t = Ticket.objects.annotate(
+            expires=ExpressionWrapper(F('active_at') + F('duration'), output_field=DateTimeField())
+        ).first()
+        self.assertEqual(t.expires, expires)
+
+    def test_mixed_type_annotation_numbers(self):
+        test = Book.objects.get(isbn='159059725')
+        b = Book.objects.annotate(
+            combined=ExpressionWrapper(F('pages') + F('rating'), output_field=IntegerField())
+        ).get(isbn=test.isbn)
+        combined = int(test.pages + test.rating)
+        self.assertEqual(b.combined, combined)
 
     def test_annotate_with_aggregation(self):
         books = Book.objects.annotate(
@@ -80,6 +112,15 @@ class NonAggregateAnnotationTestCase(TestCase):
             list(Book.objects.annotate(
                 sum_rating=Sum('rating')
             ).filter(sum_rating=F('nope')))
+
+    def test_combined_annotation_commutative(self):
+        b1 = Book.objects.get(isbn='159059725')
+        book1 = Book.objects.annotate(adjusted_rating=F('rating') + 2).get(pk=b1.pk)
+        book2 = Book.objects.annotate(adjusted_rating=2 + F('rating')).get(pk=b1.pk)
+        self.assertEqual(book1.adjusted_rating, book2.adjusted_rating)
+        book1 = Book.objects.annotate(adjusted_rating=F('rating') + None).get(pk=b1.pk)
+        book2 = Book.objects.annotate(adjusted_rating=None + F('rating')).get(pk=b1.pk)
+        self.assertEqual(book1.adjusted_rating, book2.adjusted_rating)
 
     def test_update_with_annotation(self):
         book_preupdate = Book.objects.get(pk=2)
@@ -162,7 +203,7 @@ class NonAggregateAnnotationTestCase(TestCase):
             other_chain=F('chain'),
             is_open=Value(True, BooleanField()),
             book_isbn=F('books__isbn')
-        ).select_related('store').order_by('book_isbn').filter(chain='Westfield')
+        ).order_by('book_isbn').filter(chain='Westfield')
 
         self.assertQuerysetEqual(
             qs, [
@@ -171,6 +212,35 @@ class NonAggregateAnnotationTestCase(TestCase):
             ],
             lambda d: (d.other_name, d.other_chain, d.is_open, d.book_isbn)
         )
+
+    def test_null_annotation(self):
+        """
+        Test that annotating None onto a model round-trips
+        """
+        book = Book.objects.annotate(no_value=Value(None, output_field=IntegerField())).first()
+        self.assertIsNone(book.no_value)
+
+    def test_order_by_annotation(self):
+        authors = Author.objects.annotate(other_age=F('age')).order_by('other_age')
+        self.assertQuerysetEqual(
+            authors, [
+                25, 29, 29, 34, 35, 37, 45, 46, 57,
+            ],
+            lambda a: a.other_age
+        )
+
+    def test_order_by_aggregate(self):
+        authors = Author.objects.values('age').annotate(age_count=Count('age')).order_by('age_count', 'age')
+        self.assertQuerysetEqual(
+            authors, [
+                (25, 1), (34, 1), (35, 1), (37, 1), (45, 1), (46, 1), (57, 1), (29, 2),
+            ],
+            lambda a: (a['age'], a['age_count'])
+        )
+
+    def test_annotate_exists(self):
+        authors = Author.objects.annotate(c=Count('id')).filter(c__gt=1)
+        self.assertFalse(authors.exists())
 
     def test_column_field_ordering(self):
         """
@@ -230,6 +300,7 @@ class NonAggregateAnnotationTestCase(TestCase):
                 e.id, e.first_name, e.manager, e.random_value, e.last_name, e.age,
                 e.salary, e.store.name, e.annotated_value))
 
+    @cxOracle_py3_bug
     def test_custom_functions(self):
         Company(name='Apple', motto=None, ticker_name='APPL', description='Beautiful Devices').save()
         Company(name='Django Software Foundation', motto=None, ticker_name=None, description=None).save()
@@ -255,6 +326,7 @@ class NonAggregateAnnotationTestCase(TestCase):
             lambda c: (c.name, c.tagline)
         )
 
+    @cxOracle_py3_bug
     def test_custom_functions_can_ref_other_functions(self):
         Company(name='Apple', motto=None, ticker_name='APPL', description='Beautiful Devices').save()
         Company(name='Django Software Foundation', motto=None, ticker_name=None, description=None).save()
